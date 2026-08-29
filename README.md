@@ -33,17 +33,21 @@ when you switch phones. Each new incoming SMS can also ping you on Telegram.
 {
   "address": "+15551234567",
   "body": "Your OTP is 123456",
-  "date": "1735680000000",
+  "date": "1735689600000",
   "type": 1,
-  "device": "pixel-7"
+  "device": "pixel-7",
+  "tz_offset_minutes": 210,
+  "tz_name": "Asia/Tehran"
 }
 ```
 
-`date` is epoch **milliseconds sent as a string** (a bare integer that large is
-truncated by the decoder); `type` is `1` for received, `2` for sent. Messages
-are de-duplicated on `(address, body, date, type)`, so the real-time push and
-the daily sweep can overlap freely. Every route except `GET /health` requires
-the shared secret in the `X-API-Key` header.
+`date` is **UTC epoch milliseconds sent as a string** (a bare integer that
+large is truncated by the decoder); `type` is `1` for received, `2` for sent.
+The two `tz_*` fields are optional and say where the phone was, so the server
+can show the time the handset displayed - they are recorded, never applied.
+Messages are de-duplicated on `(address, body, date, type)`, so the real-time
+push and the daily sweep can overlap freely. Every route except `GET /health`
+requires the shared secret in the `X-API-Key` header.
 
 Full API and per-component notes are in each half's README:
 [backend/README.md](backend/README.md) and [android/README.md](android/README.md).
@@ -81,8 +85,17 @@ after that.
   no Telegram credentials.
 - **All SQL is in one file** (`backend/store.salam`) and reaches the database
   only as bound parameters - no query is built by string concatenation.
-- **The phone keeps a high-water mark** (the newest timestamp uploaded) and only
-  sends what is newer, so the daily sweep is cheap after the first full scan.
+- **The phone keeps a high-water mark** (how far it has read through the SMS
+  provider) and only sends what is newer, so the daily sweep is cheap after the
+  first full scan.
+- **Every instant is UTC, everywhere.** Phones in different countries - and on
+  half-hour offsets like Tehran's +03:30 - all upload the same absolute number,
+  and each also reports its own UTC offset so the server can show the
+  wall-clock time that phone displayed. Timestamps arriving in the wrong unit
+  (seconds instead of milliseconds) or from a phone whose clock is plainly
+  wrong are corrected at the door, and the app warns its owner when its clock
+  disagrees with the server's. See
+  [Time and timezones](backend/README.md#time-and-timezones).
 - **Backups keep running with the app closed:** a manifest SMS receiver catches
   new texts, a persistent foreground service keeps the app alive (auto-started
   on boot, surviving app-swipe and system-kill), and WorkManager handles the

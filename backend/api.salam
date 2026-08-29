@@ -13,6 +13,7 @@ import crypto
 import net.http
 import encoding.json
 import parse "parse.salam"
+import clock "clock.salam"
 
 // The shared secret. Set once from main, on the main thread, before the first
 // request thread exists; only compared afterwards.
@@ -48,6 +49,17 @@ pub func Authorized(ctx: i64): bool:
     ret false
 end
 
+// ---------------------------------------------------------------- headers
+
+// A request header as a full-width integer, 0 when it is absent or is not a
+// number. Used for the per-request timezone hint, which is a small signed
+// count of minutes but arrives as text like everything else in a header.
+pub func HeaderI64(ctx: i64, name: str): i64:
+    raw := http.Ctx_header(ctx, name)
+    if raw.len() == 0: ret 0 as i64 end
+    ret parse.I64(raw)
+end
+
 // ---------------------------------------------------------------- query
 
 // A query parameter as a full-width integer, `fallback` when it is absent.
@@ -71,4 +83,16 @@ pub func QueryCount(ctx: i64, name: str): int:
     v := QueryI64(ctx, name, 0 as i64) as int
     if v < 0: ret 0 end
     ret v
+end
+
+// A query parameter naming a point in time, as UTC epoch milliseconds.
+//
+// A timestamp in a URL is the one place where the caller is as likely to be
+// a person as the app, so clock.ParseInstantMs takes either an epoch - in
+// any of the four common units - or an ISO-8601 date, which makes
+// `?since=2025-01-01T00:00:00Z` and `?since=1735689600000` the same request.
+// An ISO string with no offset is read as UTC, never as the server's own
+// local time.
+pub func QueryInstantMs(ctx: i64, name: str, fallback: i64): i64:
+    ret clock.ParseInstantMs(http.Ctx_query(ctx, name), fallback)
 end

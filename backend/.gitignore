@@ -1,6 +1,7 @@
 # Build output
 sms-backend
 .salam-build/
+dist/
 # Runtime data
 *.db
 *.db-shm

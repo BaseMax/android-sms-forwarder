@@ -5,8 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
 import com.basemax.smsforwarder.core.AppLog
+import com.basemax.smsforwarder.core.TimeUtils
 import com.basemax.smsforwarder.data.model.SmsMessageDto
 import com.basemax.smsforwarder.work.SyncScheduler
+import java.time.ZoneId
 
 class SmsReceiver : BroadcastReceiver() {
 
@@ -36,13 +38,23 @@ class SmsReceiver : BroadcastReceiver() {
             val ts = part.timestampMillis
             timestamps[address] = minOf(timestamps[address] ?: ts, ts)
         }
+        // part.timestampMillis is the service centre's timestamp: an absolute
+        // instant, the same number whatever zone the phone is set to. It is
+        // normalised rather than trusted outright, because a few carriers
+        // report it in seconds, and it is passed on unshifted -- the offset
+        // below describes where the phone was, it does not adjust the instant.
+        val now = TimeUtils.nowMs()
+        val zone = ZoneId.systemDefault()
         return bodies.map { (address, body) ->
+            val date = TimeUtils.normalizeMs(timestamps[address] ?: now, now)
             SmsMessageDto(
                 address = address,
                 body = body.toString(),
-                date = (timestamps[address] ?: System.currentTimeMillis()).toString(),
+                date = date.toString(),
                 type = Telephony.Sms.MESSAGE_TYPE_INBOX,
                 device = "",
+                tzOffsetMinutes = TimeUtils.offsetMinutesAt(date, zone),
+                tzName = TimeUtils.zoneName(zone),
             )
         }
     }

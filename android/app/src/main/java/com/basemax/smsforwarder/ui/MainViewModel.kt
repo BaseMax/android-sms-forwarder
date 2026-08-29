@@ -26,15 +26,23 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val device = MutableStateFlow(Device())
     private val message = MutableStateFlow<String?>(null)
 
+    // The three stored values are folded together first: `combine` is typed
+    // up to five sources, and the form, the device state and the transient
+    // message already claim three of them.
+    private val stored = combine(
+        settings.uploadedTotal, settings.lastSyncMs, settings.clockSkewMs,
+    ) { uploaded, lastSync, skew -> Stored(uploaded, lastSync, skew) }
+
     val state: StateFlow<HomeUiState> = combine(
-        settings.uploadedTotal, settings.lastSyncMs, form, device, message,
-    ) { uploaded, lastSync, form, device, message ->
+        stored, form, device, message,
+    ) { stored, form, device, message ->
         HomeUiState(
             baseUrl = form.baseUrl,
             apiKey = form.apiKey,
             deviceId = form.deviceId,
-            uploaded = uploaded,
-            lastSyncMs = lastSync,
+            uploaded = stored.uploaded,
+            lastSyncMs = stored.lastSyncMs,
+            clockSkewMs = stored.clockSkewMs,
             hasPermission = device.hasPermission,
             serviceRunning = device.serviceRunning,
             ignoringBattery = device.ignoringBattery,
@@ -99,6 +107,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun updateDeviceStatus(hasPermission: Boolean, serviceRunning: Boolean, ignoringBattery: Boolean) {
         device.value = Device(hasPermission, serviceRunning, ignoringBattery)
     }
+
+    private data class Stored(
+        val uploaded: Int = 0,
+        val lastSyncMs: Long = 0L,
+        val clockSkewMs: Long = 0L,
+    )
 
     private data class Form(
         val baseUrl: String = "",

@@ -19,7 +19,10 @@
  * away: the app sends the device's UTC offset alongside each message, and
  * Local() reconstructs that reading from the UTC instant. An offset, not a
  * zone name, is all a rendering needs, so the server never has to carry a
- * timezone database or care which one the phone was in.
+ * timezone database or care which country a handset was in.
+ *
+ * Nothing here reads the machine's own timezone. Where the server happens to
+ * be hosted is an accident, and it must never change what a value means.
  */
 
 package clock
@@ -80,8 +83,8 @@ func _floor_div(a: i64, b: i64): i64:
 end
 
 // "2026-08-29T12:34:56.789" for an instant already shifted into whatever
-// frame it is to be printed in. The suffix naming that frame is the
-// caller's to add - which is the only difference between UTC() and Local().
+// frame it is to be printed in. The suffix naming that frame is the caller's
+// to add - which is the only difference between UTC() and Local().
 func _civil(ms: i64): str:
     seconds := _floor_div(ms, MS_PER_SECOND)
     millis := (ms - seconds * MS_PER_SECOND) as int
@@ -90,7 +93,7 @@ func _civil(ms: i64): str:
     ret iso.substr(0, iso.len() - 1) + "." + _pad3(millis)
 end
 
-// An optionally negative run of decimal digits and nothing else.
+// An optionally negative run of decimal digits, and nothing else.
 func _is_digits(s: str): bool:
     n := s.len()
     if n == 0: ret false end
@@ -135,8 +138,8 @@ end
 //     and lands at ingest time rather than in a wrong century.
 //
 // Note what is deliberately NOT done: no timezone is applied. The number
-// already names an absolute instant, so shifting it by an offset - the phone's
-// or the server's - would be the bug, not the fix.
+// already names an absolute instant, so shifting it by an offset - the
+// phone's or the server's - would be the bug, not the fix.
 pub func NormalizeMs(v: i64, now_ms: i64): i64:
     mut ms := 0 as i64
     if v >= NS_FLOOR:
@@ -171,7 +174,7 @@ pub func NormalizeOffsetMinutes(v: i64): int:
 end
 
 // A zone name, trimmed and capped. Never parsed - the offset does the work;
-// the name is only so a human reading a row or an alert knows where the
+// the name is only so a person reading a row or an alert knows where the
 // phone was.
 pub func NormalizeZoneName(s: str): str:
     t := s.trim()
@@ -202,7 +205,7 @@ end
 
 // The same instant as the phone's own clock showed it:
 // "2026-08-29T16:04:56.789+03:30". Not a different time - the same point in
-// time, written in a different frame, with the offset saying which frame, so
+// time, written in a different frame, with the offset naming that frame, so
 // the string still parses back to the identical instant.
 pub func Local(ms: i64, offset_minutes: int): str:
     ret _civil(ms + (offset_minutes as i64) * MS_PER_MINUTE) + FormatOffset(offset_minutes)

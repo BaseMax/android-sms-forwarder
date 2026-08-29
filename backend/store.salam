@@ -15,11 +15,12 @@
  * safer than a pool.
  *
  * TIME. Both instants in a row - `date` and `received_at` - are UTC epoch
- * milliseconds, in the same unit, and the server writes `received_at` from
- * its own clock rather than leaving it to a SQL default. `tz_offset` is the
- * phone's UTC offset in minutes when the message happened; it is carried so
- * a reader can be shown the wall-clock time the phone showed, and it never
- * takes part in ordering, filtering or de-duplication. See clock.salam.
+ * MILLISECONDS, the same unit, and the server stamps `received_at` from its
+ * own clock rather than leaving it to a SQL default. `tz_offset` is the
+ * phone's UTC offset in minutes at the moment the message happened; it rides
+ * along so a reader can be shown the wall-clock time the handset showed, and
+ * it never takes part in ordering, filtering or de-duplication. The one and
+ * only frame in this file is UTC. See clock.salam for why.
  */
 
 package store
@@ -28,12 +29,12 @@ import db.sqlite
 import sync
 import clock "clock.salam"
 
-// Schema generation. Bumped whenever _upgrade() gains a step; the number
-// lives in the database file as PRAGMA user_version.
+// Schema generation. Bumped whenever an _upgrade_to_* step is added; the
+// number lives inside the database file as PRAGMA user_version.
 const SCHEMA_VERSION := 1
 
 // The table as it stands today. A database created fresh gets exactly this
-// and is stamped as current; an older file is brought up to it by _upgrade().
+// and is stamped as current; an older file is walked up to it by _upgrade_*.
 const CREATE_MESSAGES := "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', date INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 1, received_at INTEGER NOT NULL DEFAULT 0, tz_offset INTEGER NOT NULL DEFAULT 0, tz_name TEXT NOT NULL DEFAULT '')"
 
 // The columns _row() reads, in the order it reads them. Any query that
@@ -61,10 +62,12 @@ mut _ready := false
 // separate serialiser to keep in step, and no place for the two to drift.
 //
 // `date` and `received_at` are i64 UTC epoch milliseconds and go out as bare
-// JSON numbers. The three `*_utc` / `date_local` strings beside them are not
-// columns: _row derives them from those numbers so that a client - or a
-// person reading the JSON - never has to guess a unit or a zone. `id` and
-// `received_at` are the database's to fill in and are ignored by Save().
+// JSON numbers. The strings beside them are not columns: _row derives them,
+// so a client - or a person reading the JSON - never has to guess a unit or
+// a zone. `date_utc` is the instant; `date_local` is that same instant
+// written in the phone's own frame, offset included, so it parses back to
+// exactly `date`. `id` and `received_at` are the database's to fill in and
+// are ignored by Save().
 pub struct Sms:
     pub id: i64 = 0
     pub device: str = ""
@@ -78,20 +81,6 @@ pub struct Sms:
     pub tz_name: str = ""
     pub received_at: i64 = 0
     pub received_at_utc: str = ""
-end
-
-// A page of messages and the total it was drawn from, so a client can page
-// through without a second request. The server's own clock rides along:
-// a phone can compare it against its own and tell that its date is wrong,
-// and a client paging forward can use it as the next `since` instead of
-// trusting a local clock it has no reason to trust.
-pub struct Page:
-    pub items: Vector<Sms> = Vector {} as Vector<Sms>
-    pub count: i64 = 0
-    pub since: i64 = 0
-    pub since_utc: str = ""
-    pub server_time_ms: i64 = 0
-    pub server_time_utc: str = ""
 end
 
 // ---------------------------------------------------------------- helpers
@@ -152,22 +141,22 @@ func _version(): int:
     ret sqlite.QueryInt(_db, "PRAGMA user_version")
 end
 
-// Generation 0 -> 1: put both instants in the same unit and make room for
-// where the phone was.
+// Generation 0 -> 1: put both instants in one unit, and make room for where
+// the phone was.
 //
-// Generation 0 wrote `received_at` in epoch SECONDS (a strftime('%s') default)
-// while `date` was already in milliseconds - two units in one row, which is
-// exactly the kind of thing that reads fine until someone subtracts them.
-// Both are milliseconds from here on, so the old seconds are scaled up. Any
-// `date` that was stored in seconds - by a client that sent the wrong unit
-// before clock.NormalizeMs existed - is scaled the same way; that one is
-// UPDATE OR IGNORE because the fix can collide with a correctly-stored copy
-// of the same message under the de-duplication index, and the right outcome
-// when it does is to leave the good row alone.
+// Generation 0 wrote `received_at` in epoch SECONDS - a strftime('%s')
+// column default - while `date` was already milliseconds. Two units in one
+// row is the kind of thing that reads fine right up until someone subtracts
+// them, so the old seconds are scaled up and everything is milliseconds from
+// here on. A `date` that was stored in seconds by a client sending the wrong
+// unit, back before clock.NormalizeMs existed, is scaled the same way; that
+// one is UPDATE OR IGNORE because the correction can collide with an
+// already-correct copy of the same message under the de-duplication index,
+// and leaving the good row alone is the right outcome when it does.
 //
 // The threshold in both statements is 2000-01-01 in milliseconds: below it a
-// value cannot be a plausible instant in milliseconds, so it is one in
-// seconds. Same reasoning, and same number, as clock.NormalizeMs.
+// number cannot be a plausible instant in milliseconds, so it is one in
+// seconds. Same reasoning, and the same constant, as clock.NormalizeMs.
 func _upgrade_to_1():
     sqlite.Exec(_db, "ALTER TABLE messages ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
     sqlite.Exec(_db, "ALTER TABLE messages ADD COLUMN tz_name TEXT NOT NULL DEFAULT ''")
@@ -177,26 +166,28 @@ end
 
 // The schema, applied on every start. A fresh file is created at the current
 // generation and stamped with it; an existing one is walked forward through
-// the _upgrade_* steps it has not seen. Everything else is IF NOT EXISTS, so
-// this is both the first-run setup and the no-op an up-to-date file gets.
+// the upgrade steps it has not seen yet. Everything else is IF NOT EXISTS,
+// so this is both the first-run setup and the no-op an up-to-date file gets.
 // schema.sql mirrors the result, commented, for inspecting a database by hand.
 func _migrate():
     // WAL lets a reader and a writer coexist; the busy timeout absorbs the
     // brief contention two uploads can still create.
     sqlite.Exec(_db, "PRAGMA journal_mode=WAL")
     sqlite.Exec(_db, "PRAGMA busy_timeout=5000")
+    // Asked before the CREATE, because afterwards there is no telling a file
+    // that already had the table from one this very call just made.
     fresh := !_table_exists()
     sqlite.Exec(_db, CREATE_MESSAGES)
     if fresh:
         sqlite.Exec(_db, "PRAGMA user_version=1")
     end
-    if _version() < 1:
+    if _version() < SCHEMA_VERSION:
         _upgrade_to_1()
         sqlite.Exec(_db, "PRAGMA user_version=1")
     end
     // The de-dup key: two uploads of the same SMS are the same row. It is
-    // built on the normalised UTC millisecond `date`, never on anything the
-    // phone's timezone touches, so the same message uploaded from two
+    // built on the normalised UTC millisecond `date` and never on anything
+    // the phone's timezone touches, so the same message uploaded from two
     // different countries still collapses onto one row.
     sqlite.Exec(_db, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
     // The restore path reads by date.
@@ -227,10 +218,11 @@ end
 // knows whether to raise an alert.
 //
 // `m.date` is expected to have been through clock.NormalizeMs already -
-// ingest.salam is the only caller and does exactly that - so what lands in
-// the column is UTC epoch milliseconds whatever unit or clock it came from.
-// `received_at` is stamped here from the server's clock, the one clock in
-// the system that is the same for every phone; `id` is the database's.
+// ingest.salam is the only caller, and that is the first thing it does - so
+// what lands in the column is UTC epoch milliseconds whatever unit, and
+// whatever clock, it arrived in. `received_at` is stamped here from the
+// server's clock, the one clock in the system that is the same for every
+// phone; `id` is the database's.
 pub func Save(m: Sms): bool:
     sync.Lock(_lock)
     defer sync.Unlock(_lock)
@@ -249,23 +241,21 @@ pub func Save(m: Sms): bool:
 end
 
 // A page of messages whose UTC timestamp is at or after `since`
-// (0 = everything), with the total that matches it. This is the restore path
-// a new phone calls to pull its history back.
+// (0 = everything), newest first. This is the restore path a new phone calls
+// to pull its history back.
 //
-// Rows and total are read under one lock, so an upload arriving mid-request
-// cannot make `count` disagree with `items`.
-pub func ListPage(since: i64, limit: int, offset: int): Page:
+// The total matching `since` comes back through `total` rather than from a
+// second call, because both are read here under a single lock: an upload
+// arriving mid-request cannot make the count disagree with the rows. It is
+// an out-parameter rather than a field of some returned struct because the
+// envelope those two travel in is a wire shape, and wire shapes live in
+// routes.salam.
+pub func ListPage(since: i64, limit: int, offset: int, total &: i64): Vector<Sms>:
     sync.Lock(_lock)
     defer sync.Unlock(_lock)
-    now := clock.NowMs()
-    ret Page {
-        items = _select(since, limit, offset),
-        count = _count(since),
-        since = since,
-        since_utc = clock.UTC(since),
-        server_time_ms = now,
-        server_time_utc = clock.UTC(now)
-    }
+    items := _select(since, limit, offset)
+    total = _count(since)
+    ret items
 end
 
 // Every message stored.

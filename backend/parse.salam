@@ -1,23 +1,8 @@
-/*
- * SMS Forwarder backend - reading numbers and fields out of untyped input.
- *
- * Nothing here knows about SMS, HTTP or SQL. It is the one place that turns
- * text and dynamic JSON values into the types the rest of the service uses,
- * so the same rules apply to a query string, an environment variable and a
- * message body.
- */
-
 package parse
 
 import conv
 import encoding.value
 
-// A base-10 signed integer at full 64-bit width.
-//
-// str.to_int() parses to i32, so every number that arrives as text - an
-// epoch-millisecond timestamp, a `since` query parameter, a Telegram chat id
-// - has to come through here or silently lose its top 32 bits. Anything that
-// is not a digit ends the number, and an empty or unparsable string is 0.
 pub func I64(s: str): i64:
     n := s.len()
     if n == 0: ret 0 as i64 end
@@ -38,17 +23,6 @@ pub func I64(s: str): i64:
     ret r
 end
 
-// ---------------------------------------------------------------- JSON fields
-//
-// The ingest endpoint reads requests through the dynamic value.Value tree
-// rather than through json.Unmarshal, and that is deliberate: a derived
-// decoder pins each field to one wire type, and `date` arrives either quoted
-// (what the app sends, and the only form that keeps full 64-bit precision) or
-// bare (what other clients send). One field, two accepted shapes, so the
-// three readers below take whichever turns up.
-
-// A field as text. A number is formatted rather than refused, so a client
-// that sends `"type": 1` and one that sends `"type": "1"` agree.
 pub func Text(item: value.Value, key: str): str:
     if !value.ObjectHas(item, key): ret "" end
     f := value.ObjectGet(item, key)
@@ -57,16 +31,12 @@ pub func Text(item: value.Value, key: str): str:
     ret ""
 end
 
-// Text(), with `fallback` when the field is absent or empty.
 pub func TextOr(item: value.Value, key: str, fallback: str): str:
     s := Text(item, key)
     if s.len() == 0: ret fallback end
     ret s
 end
 
-// A field as a whole number. A quoted one is parsed at full i64 width; a bare
-// one is taken as the decoder produced it, which is why large values should
-// travel quoted.
 pub func Number(item: value.Value, key: str): i64:
     if !value.ObjectHas(item, key): ret 0 as i64 end
     f := value.ObjectGet(item, key)

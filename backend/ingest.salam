@@ -9,6 +9,17 @@
  * Re-uploading a message already stored is harmless: the store de-duplicates
  * and reports whether a row was genuinely new, and only a genuinely new
  * *inbound* message raises a Telegram alert.
+ *
+ * TIME. This is the border of the service, so it is where every incoming
+ * "when" is put into the one frame the rest of the program uses: UTC epoch
+ * milliseconds, through clock.NormalizeMs. A phone in Tehran, a phone in New
+ * York and a script sending epoch seconds all leave here in the same unit
+ * and the same frame. The phone's own UTC offset is kept beside the instant -
+ * never applied to it - so the wall-clock reading its owner saw can be
+ * reconstructed later without the stored instant depending on where the
+ * phone was. One `now` is taken per request and used for every message in
+ * it, so a bulk sync cannot have its messages fall on either side of a
+ * second boundary.
  */
 
 package ingest
@@ -17,15 +28,32 @@ import encoding.json
 import encoding.value
 import encoding.encerr
 import parse "parse.salam"
+import clock "clock.salam"
 import store "store.salam"
 import notify "notify.salam"
 
 // What one request did. `received` is every message the body carried, and it
 // always equals stored + duplicates.
+//
+// The server's clock rides along so the phone can measure its own drift
+// against it: the app compares `server_time_ms` with what its own clock said
+// at the moment of the call and warns its owner when the two disagree, which
+// is the one timezone-shaped fault a phone cannot detect on its own.
 pub struct Report:
     pub received: int = 0
     pub stored: int = 0
     pub duplicates: int = 0
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
+end
+
+// What a request says about the phone when its individual messages do not.
+// Each field is a fallback: a message naming its own device, or its own
+// timezone, wins over the headers the request carried.
+pub struct Defaults:
+    pub device: str = ""
+    pub tz_offset_minutes: int = 0
+    pub tz_name: str = ""
 end
 
 // Count one message, on whichever side it landed. Every path through this
@@ -39,8 +67,29 @@ func _count(rep &: Report, created: bool):
     end
 end
 
+// The phone's UTC offset for one message, in minutes east of Greenwich.
+// "tz_offset_minutes" is what the app sends; "tz_offset" is accepted as the
+// obvious shorthand a hand-written client reaches for. Absent on the message
+// means "whatever the request said", and absent there too means UTC.
+func _offset(item: value.Value, fallback: int): int:
+    if value.ObjectHas(item, "tz_offset_minutes"):
+        ret clock.NormalizeOffsetMinutes(parse.Number(item, "tz_offset_minutes"))
+    end
+    if value.ObjectHas(item, "tz_offset"):
+        ret clock.NormalizeOffsetMinutes(parse.Number(item, "tz_offset"))
+    end
+    ret fallback
+end
+
+// The IANA name of that zone, e.g. "Asia/Tehran". Recorded for a person to
+// read, never interpreted - the offset above is what any rendering needs.
+func _zone(item: value.Value, fallback: str): str:
+    name := parse.TextOr(item, "tz_name", parse.TextOr(item, "timezone", fallback))
+    ret clock.NormalizeZoneName(name)
+end
+
 // Store one message object. Returns true only when a new row was created.
-func _one(item: value.Value, default_device: str): bool:
+func _one(item: value.Value, def: Defaults, now_ms: i64): bool:
     if !value.IsObject(item): ret false end
     address := parse.Text(item, "address")
     text := parse.Text(item, "body")
@@ -49,49 +98,60 @@ func _one(item: value.Value, default_device: str): bool:
     // 1 = received/inbox, 2 = sent. A missing type means inbox.
     mut kind := parse.Number(item, "type") as int
     if kind == 0: kind = 1 end
+    // The one conversion in the whole ingest path: whatever unit and
+    // whatever clock this arrived in becomes UTC epoch milliseconds.
+    date := clock.NormalizeMs(parse.Number(item, "date"), now_ms)
+    offset := _offset(item, def.tz_offset_minutes)
+    zone := _zone(item, def.tz_name)
     created := store.Save(store.Sms {
-        device = parse.TextOr(item, "device", default_device),
+        device = parse.TextOr(item, "device", def.device),
         address = address,
         body = text,
-        date = parse.Number(item, "date"),
-        type = kind
+        date = date,
+        type = kind,
+        tz_offset_minutes = offset,
+        tz_name = zone
     })
     if created && kind == 1:
-        notify.SmsAlert(address, text)
+        notify.SmsAlert(address, text, date, offset, zone)
     end
     ret created
 end
 
-func _array(arr: value.Value, default_device: str, rep &: Report):
+func _array(arr: value.Value, def: Defaults, now_ms: i64, rep &: Report):
     repeat value.ArrayLen(arr) with i:
-        _count(rep, _one(value.ArrayGet(arr, i), default_device))
+        _count(rep, _one(value.ArrayGet(arr, i), def, now_ms))
     end
 end
 
 // The three accepted body shapes, reduced to the one that matters.
-func _walk(v: value.Value, default_device: str, rep &: Report):
+func _walk(v: value.Value, def: Defaults, now_ms: i64, rep &: Report):
     if value.IsArray(v):
-        _array(v, default_device, rep)
+        _array(v, def, now_ms, rep)
         ret
     end
     if value.IsObject(v) && value.ObjectHas(v, "messages"):
-        _array(value.ObjectGet(v, "messages"), default_device, rep)
+        _array(value.ObjectGet(v, "messages"), def, now_ms, rep)
         ret
     end
-    _count(rep, _one(v, default_device))
+    _count(rep, _one(v, def, now_ms))
 end
 
-// Decode a request body and store what it carries. Returns false, leaving
-// `rep` untouched, when the body is not JSON. `default_device` labels any
-// message that does not name its own device.
-pub func Request(body: str, default_device: str, rep &: Report): bool:
+// Decode a request body and store what it carries. Returns false - leaving
+// the three counts at zero, though the server clock is still filled in -
+// when the body is not JSON. `def` supplies the device label and the
+// timezone for any message that does not carry its own.
+pub func Request(body: str, def: Defaults, rep &: Report): bool:
+    now := clock.NowMs()
+    rep.server_time_ms = now
+    rep.server_time_utc = clock.UTC(now)
     mut e := encerr.NoError()
     mut v := json.Decode(body, e)
     mut ok := true
     if encerr.IsError(e):
         ok = false
     else:
-        _walk(v, default_device, rep)
+        _walk(v, def, now, rep)
     end
     value.ValueFree(v)
     ret ok

@@ -1,0 +1,199 @@
+name: Backend Linux Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      salam_version:
+        description: 'Salam compiler release to build with (e.g. 0.3.5)'
+        required: false
+        default: ''
+
+concurrency:
+  group: backend-linux-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SALAM_VERSION: ${{ inputs.salam_version || '0.3.5' }}
+  BINARY: sms-backend
+  TARGET: linux-x86_64
+
+jobs:
+  build:
+    name: Build backend executable (linux x86_64)
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libsqlite3-dev libxml2 unzip
+
+      - name: Cache the Salam compiler
+        uses: actions/cache@v4
+        with:
+          path: ~/.salam/bin
+          key: salam-${{ env.SALAM_VERSION }}-${{ runner.os }}-x64
+
+      - name: Install the Salam compiler
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ ! -x "$HOME/.salam/bin/salam" ]; then
+            curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh \
+              | sh -s -- --version "$SALAM_VERSION" --no-modify-path
+          fi
+          echo "$HOME/.salam/bin" >> "$GITHUB_PATH"
+
+      - name: Show the compiler version
+        run: salam version
+
+      - name: Build the executable
+        run: salam build main.salam --output="$BINARY"
+
+      - name: Smoke test the executable
+        run: |
+          set -eu
+
+          if env -u API_KEY DB_PATH=smoke.db "./$BINARY"; then
+            echo "expected a non-zero exit when API_KEY is unset" >&2
+            exit 1
+          fi
+
+          rm -f smoke.db
+          API_KEY=ci-smoke-key DB_PATH=smoke.db PORT=18080 "./$BINARY" &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 30); do
+            curl -fsS -m 2 http://127.0.0.1:18080/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+          echo "health:"
+          curl -fsS -m 5 http://127.0.0.1:18080/health
+          echo
+
+          echo "unauthenticated /api/stats (expecting 401):"
+          code=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/stats)
+          echo "$code"
+          [ "$code" = "401" ] || { echo "expected 401, got $code" >&2; exit 1; }
+
+          echo "ingest:"
+          curl -fsS -m 5 -X POST http://127.0.0.1:18080/api/sms \
+            -H 'X-API-Key: ci-smoke-key' \
+            -H 'Content-Type: application/json' \
+            -d '{"address":"+15551234567","body":"ci smoke","date":"1735680000000","type":1,"device":"ci"}'
+          echo
+
+          echo "read back:"
+          curl -fsS -m 5 -H 'X-API-Key: ci-smoke-key' \
+            'http://127.0.0.1:18080/api/sms?limit=1'
+          echo
+
+          rm -f smoke.db smoke.db-shm smoke.db-wal
+
+      - name: Package the executable
+        id: package
+        run: |
+          set -eu
+          name="$BINARY-$TARGET"
+          mkdir -p dist
+          cp "$BINARY" "dist/$BINARY"
+          tar -czf "dist/$name.tar.gz" -C dist "$BINARY"
+          rm "dist/$BINARY"
+          (cd dist && sha256sum "$name.tar.gz" > SHA256SUMS)
+
+          {
+            echo "name=$name"
+            echo "sha256=$(cut -d' ' -f1 < dist/SHA256SUMS)"
+            echo "size=$(du -h "$BINARY" | cut -f1)"
+            echo "version=$(salam version --short)"
+          } >> "$GITHUB_OUTPUT"
+
+          file "$BINARY"
+          ldd "$BINARY"
+          ls -la dist/
+
+      - name: Upload the executable
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.name }}-${{ github.sha }}
+          path: |
+            backend/dist/${{ steps.package.outputs.name }}.tar.gz
+            backend/dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Comment the download link on the PR
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@v7
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          SALAM_VERSION_BUILT: ${{ steps.package.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+          SIZE: ${{ steps.package.outputs.size }}
+        with:
+          script: |
+            const marker = '<!-- backend-linux-build -->';
+            const { ARTIFACT_URL, SALAM_VERSION_BUILT, SHA256, SIZE } = process.env;
+            const body = [
+              marker,
+              '### Backend build ready (Linux x86_64)',
+              '',
+              `\`sms-backend\` (${SIZE}), compiled with Salam ${SALAM_VERSION_BUILT} - [download the tarball](${ARTIFACT_URL})`,
+              '',
+              '```sh',
+              'tar -xzf sms-backend-linux-x86_64.tar.gz',
+              'API_KEY=... DB_PATH=sms.db PORT=8080 ./sms-backend',
+              '```',
+              '',
+              `Dynamically linked against \`libsqlite3.so.0\`, \`libm\`, \`libpthread\` and glibc, so the host needs SQLite installed. Health, auth, ingest and read-back were smoke tested against this binary.`,
+              '',
+              `<sub>sha256 \`${SHA256}\` &middot; commit ${context.sha.slice(0, 7)}</sub>`,
+            ].join('\n');
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

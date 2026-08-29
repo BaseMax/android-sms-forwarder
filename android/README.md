@@ -53,8 +53,8 @@ an OEM keeps a background app alive. The Home screen shows whether it is granted
 | `work/SyncWorker` | The one uploader: provider sweep, or direct upload of received messages. |
 | `work/SyncScheduler` | Daily job, "Sync now", and expedited incoming upload. |
 | `receiver/BootReceiver` | Re-arm service + sync after boot / update. |
-| `data/SmsRepository` | Reads `Telephony.Sms.CONTENT_URI` (inbox + sent). |
-| `data/Settings` | Server URL, API key, device label, high-water mark, counter (DataStore). |
+| `data/SmsRepository` | Reads `Telephony.Sms.CONTENT_URI` (inbox + sent); returns normalised UTC messages plus the raw provider cursor. |
+| `data/Settings` | Server URL, API key, device label, sync cursor, last-sync time, clock skew, counter (DataStore). |
 | `MainActivity` + `ui/HomeScreen` | Redesigned one-screen Compose UI (status hero, protection, server, backup). |
 | `ui/theme/Theme` | Material 3 brand theme (light/dark + dynamic color). |
 
@@ -67,7 +67,9 @@ harmless.
 The code is split into small, single-purpose layers, each depending only on the
 ones below it:
 
-- `core/` shared helpers: `AppLog` (one log tag) and `Permissions`.
+- `core/` shared helpers: `AppLog` (one log tag), `Permissions`, and
+  `TimeUtils` - the only file that normalises, formats or reasons about a
+  timestamp.
 - `data/` the sources: `Settings` (DataStore), `SmsRepository` (SMS provider),
   the `SmsMessageDto` model and its `MessageCodec`.
 - `network/` Retrofit `SmsApi` and the `ApiClient` factory.
@@ -89,11 +91,52 @@ ones below it:
   `ic_launcher_background`) with a **monochrome** layer for Android 13+ themed
   icons, plus a dedicated white **status-bar icon** for the service notification.
 
-## Timestamps are sent as strings
+## Time and timezones
 
-SMS dates are epoch **milliseconds** (a 64-bit value), serialized as JSON
-strings because the backend's decoder truncates a bare integer that large. See
-`SmsMessageDto`.
+Every instant that leaves this phone is **UTC epoch milliseconds**, serialized
+as a JSON string because the backend's decoder truncates a bare integer that
+large. Nothing is converted on the way out and no local time is ever uploaded.
+
+That is not a simplification, it is what Android already gives us:
+`Telephony.Sms.DATE` and `SmsMessage.timestampMillis` are absolute instants,
+identical on two handsets in two countries that receive the same message.
+`core/TimeUtils` is the only file that touches any of this, and it does three
+things:
+
+- **Normalises.** A handful of carriers and restore tools report the provider's
+  `date` in seconds, which read as milliseconds would file every message in
+  January 1970; a phone whose clock was never set reports a date that would
+  sort and de-duplicate wrongly forever. Both are corrected with the same
+  thresholds the server uses, so the two ends never disagree about what a
+  number meant.
+- **Reports the zone, without applying it.** Each message carries
+  `tz_offset_minutes` and `tz_name` - the offset in force **at that message's
+  own instant**, so a text received before a daylight-saving change keeps the
+  offset that was true then, and a phone that has since flown abroad does not
+  relabel its older messages. The server stores them beside the instant and
+  uses them only to render the wall-clock time the handset showed. `ApiClient`
+  also sends `X-Tz-Offset` / `X-Tz-Name` once per request, as a default for
+  messages that do not carry their own.
+- **Renders local time in exactly one place** - `TimeUtils.formatForPeople`,
+  used only by the Home screen, and it names the zone so a reader who has
+  travelled knows whose clock they are looking at.
+
+The app also watches its own clock: every upload response carries the server's
+time, `BackupManager` records the difference, and the Backup card says so when
+the two are more than two minutes apart. A wrong phone date does not stop a
+backup - it files messages under the wrong day - so it is worth surfacing.
+
+Two stored values are deliberately kept apart in `Settings`, because they look
+alike and are not:
+
+| Value | What it is |
+| ----- | ---------- |
+| `syncCursor` | How far the sweep has read through the SMS provider, in the provider's own **raw** units. A position in a table; never formatted, never compared to a clock. |
+| `lastSyncMs` | When the last sync actually finished, as a UTC instant. This is what "Last sync" shows. |
+
+Feeding a normalised timestamp back into the provider's `DATE > ?` on a device
+that stores seconds would match nothing and stall the sync silently, which is
+why the cursor stays raw.
 
 ## Build
 

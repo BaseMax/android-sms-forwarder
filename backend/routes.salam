@@ -6,7 +6,7 @@
  *                     harmless). On each genuinely new inbound message it
  *                     raises a Telegram alert.
  *   GET  /api/sms     read messages back (the restore path for a new phone):
- *                     ?since=<epoch_ms>&limit=<=1000&offset=
+ *                     ?since=<epoch_ms | ISO-8601>&limit=<=1000&offset=
  *   GET  /api/stats   how many messages are stored
  *   GET  /health      liveness, unauthenticated
  *
@@ -15,6 +15,12 @@
  * request, call one collaborator, send a struct - because the work itself
  * lives in api.salam, ingest.salam and store.salam. There is no SQL here, no
  * Telegram call, and no JSON text.
+ *
+ * TIME. Every reply carries the server's clock in UTC, twice over: as epoch
+ * milliseconds for a program and as an ISO-8601 string for a person. That is
+ * what lets a phone anywhere in the world check its own clock against the
+ * one clock all of them share, and it is why no reply this service sends
+ * ever contains an unlabelled local time.
  */
 
 package routes
@@ -22,6 +28,7 @@ package routes
 import net.http
 import net.router
 import api "api.salam"
+import clock "clock.salam"
 import ingest "ingest.salam"
 import store "store.salam"
 import notify "notify.salam"
@@ -29,26 +36,57 @@ import notify "notify.salam"
 const PAGE_DEFAULT := 100
 const PAGE_MAX := 1000
 
-// The shapes the read paths answer with. Like store.Sms, each one IS its wire
-// format: json.Marshal derives the encoder from the fields.
-//
-// Page lives here rather than in store because the derive cannot encode a
-// Vector<store.Sms> nested in a struct declared in another module; declared
-// here, alongside the api.Send that marshals it, it works.
+// The three shapes these routes answer with. Like store.Sms, each one IS its
+// wire format: json.Marshal derives the encoder from the fields.
+
+// A page of stored messages and the total it was drawn from, so a client can
+// page through without a second request. `since` is echoed back as the
+// server understood it - a client that sent an ISO-8601 date, or the wrong
+// unit, can see what that became - and the server's own clock rides along so
+// a phone can tell that its date is wrong, and so a client paging forward
+// has a cursor it need not trust its own clock for.
 pub struct Page:
     pub items: Vector<store.Sms> = Vector {} as Vector<store.Sms>
-    // Total matching `since`, so a client can page through it.
     pub count: i64 = 0
+    pub since: i64 = 0
+    pub since_utc: str = ""
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
 end
 
 pub struct Stats:
     pub total: i64 = 0
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
 end
 
+// `timezone` is a constant, and saying so is the point: it is the service
+// promising that every instant it hands out is UTC, so a client never has to
+// discover the server's zone - and a server moved to another country does
+// not silently change the meaning of its own responses.
 pub struct Health:
     pub status: str = "ok"
     pub service: str = "sms-forwarder"
     pub notifications: bool = false
+    pub timezone: str = "UTC"
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
+end
+
+// What the request as a whole says about the phone: a device label and a
+// timezone, either of which an individual message may override. Sending them
+// once as headers keeps a bulk sync of a thousand messages from repeating
+// the same two fields a thousand times.
+//
+//   X-Device-Id   free-form label, e.g. "pixel-7"
+//   X-Tz-Offset   the phone's UTC offset in minutes, e.g. 210 for +03:30
+//   X-Tz-Name     the IANA zone, e.g. "Asia/Tehran"
+func _defaults(ctx: i64): ingest.Defaults:
+    ret ingest.Defaults {
+        device = http.Ctx_header(ctx, "X-Device-Id"),
+        tz_offset_minutes = clock.NormalizeOffsetMinutes(api.HeaderI64(ctx, "X-Tz-Offset")),
+        tz_name = clock.NormalizeZoneName(http.Ctx_header(ctx, "X-Tz-Name"))
+    }
 end
 
 // POST /api/sms
@@ -60,9 +98,7 @@ func _create_sms(ctx: i64):
         ret
     end
     mut rep := ingest.Report {}
-    // X-Device-Id labels the whole request, for a phone that would otherwise
-    // repeat its name on every message in the body.
-    if !ingest.Request(body, http.Ctx_header(ctx, "X-Device-Id"), rep):
+    if !ingest.Request(body, _defaults(ctx), rep):
         api.Fail(ctx, 400, "invalid JSON")
         ret
     end
@@ -72,23 +108,43 @@ end
 // GET /api/sms
 func _list_sms(ctx: i64):
     if !api.Authorized(ctx): ret end
-    since := api.QueryI64(ctx, "since", 0 as i64)
+    since := api.QueryInstantMs(ctx, "since", 0 as i64)
     limit := api.QueryLimit(ctx, "limit", PAGE_DEFAULT, PAGE_MAX)
     offset := api.QueryCount(ctx, "offset")
+    now := clock.NowMs()
     mut total := 0 as i64
-    items := store.List(since, limit, offset, total)
-    api.Send(ctx, 200, Page { items = items, count = total })
+    items := store.ListPage(since, limit, offset, total)
+    api.Send(ctx, 200, Page {
+        items = items,
+        count = total,
+        since = since,
+        since_utc = clock.UTC(since),
+        server_time_ms = now,
+        server_time_utc = clock.UTC(now)
+    })
 end
 
 // GET /api/stats
 func _stats(ctx: i64):
     if !api.Authorized(ctx): ret end
-    api.Send(ctx, 200, Stats { total = store.Total() })
+    now := clock.NowMs()
+    api.Send(ctx, 200, Stats {
+        total = store.Total(),
+        server_time_ms = now,
+        server_time_utc = clock.UTC(now)
+    })
 end
 
-// GET /health - the one route that answers without a key.
+// GET /health - the one route that answers without a key. It doubles as the
+// clock a phone checks itself against, which is a good reason for it to stay
+// the route that needs no credentials to be useful.
 func _health(ctx: i64):
-    api.Send(ctx, 200, Health { notifications = notify.Enabled() })
+    now := clock.NowMs()
+    api.Send(ctx, 200, Health {
+        notifications = notify.Enabled(),
+        server_time_ms = now,
+        server_time_utc = clock.UTC(now)
+    })
 end
 
 // The whole public surface of the service, in one place.

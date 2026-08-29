@@ -11,16 +11,37 @@
  *
  * If either is missing the notifier stays disabled and the API still works;
  * the SMS is stored either way.
+ *
+ * TIME. An alert is the one place a person reads a timestamp directly, so it
+ * spells out both readings of the same instant: UTC, which is identical for
+ * every phone and for the reader wherever they are, and - when the phone said
+ * where it was - the wall-clock time the handset itself showed. Neither is
+ * the server's local time: the machine's own zone is an accident of where it
+ * is hosted and appears in nothing this service writes.
  */
 
 package notify
 
 import telegram.bot
+import clock "clock.salam"
 
 // Set once in Init(), read from request threads afterwards.
 mut _bot := bot.Bot {}
 mut _chat := 0 as i64
 mut _enabled := false
+
+// The "When:" block of an alert. UTC always; the phone's own reading only
+// when it differs from UTC or the phone named its zone, so a handset already
+// on UTC does not get the same line printed to it twice.
+func _when(date_ms: i64, tz_offset_minutes: int, tz_name: str): str:
+    mut s := "When: " + clock.UTC(date_ms) + " (UTC)"
+    if tz_offset_minutes != 0 || tz_name.len() > 0:
+        mut where := ""
+        if tz_name.len() > 0: where = " " + tz_name end
+        s = s + "\nPhone: " + clock.Local(date_ms, tz_offset_minutes) + where
+    end
+    ret s
+end
 
 // Wire up the bot. Returns false (and leaves the notifier disabled) when the
 // token or chat id is absent, so main can log that alerts are off without
@@ -40,12 +61,14 @@ pub func Enabled(): bool:
     ret _enabled
 end
 
-// Fire-and-forget alert for one received SMS. The API response does not
-// depend on Telegram succeeding, so the result is intentionally ignored.
-pub func SmsAlert(address: str, body: str):
+// Fire-and-forget alert for one received SMS. `date_ms` is the stored UTC
+// instant and `tz_offset_minutes` the phone's offset at that instant, both
+// exactly as they went into the database. The API response does not depend
+// on Telegram succeeding, so the result is intentionally ignored.
+pub func SmsAlert(address: str, body: str, date_ms: i64, tz_offset_minutes: int, tz_name: str):
     if !_enabled: ret end
     mut from := address
     if from.len() == 0: from = "(unknown)" end
-    text := "New SMS received\n\nFrom: " + from + "\n\n" + body
+    text := "New SMS received\n\nFrom: " + from + "\n" + _when(date_ms, tz_offset_minutes, tz_name) + "\n\n" + body
     bot.SendMessage(_bot, _chat, text)
 end
