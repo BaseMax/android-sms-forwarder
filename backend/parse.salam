@@ -5,7 +5,7 @@ import encoding.value
 
 pub func I64(s: str): i64:
     n := s.len()
-    if n == 0: ret 0 as i64 end
+    if n == 0: ret 0 end
     mut i := 0
     mut neg := false
     if s.substr(0, 1) == "-":
@@ -38,10 +38,10 @@ pub func TextOr(item: value.Value, key: str, fallback: str): str:
 end
 
 pub func Number(item: value.Value, key: str): i64:
-    if !value.ObjectHas(item, key): ret 0 as i64 end
+    if !value.ObjectHas(item, key): ret 0 end
     f := value.ObjectGet(item, key)
     if value.IsString(f): ret I64(value.AsString(f)) end
     if value.IsInt(f): ret value.AsInt(f) end
     if value.IsFloat(f): ret value.AsFloat(f) as i64 end
-    ret 0 as i64
+    ret 0
 end
