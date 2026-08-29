@@ -26,9 +26,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val device = MutableStateFlow(Device())
     private val message = MutableStateFlow<String?>(null)
 
-    // The three stored values are folded together first: `combine` is typed
-    // up to five sources, and the form, the device state and the transient
-    // message already claim three of them.
     private val stored = combine(
         settings.uploadedTotal, settings.lastSyncMs, settings.clockSkewMs,
     ) { uploaded, lastSync, skew -> Stored(uploaded, lastSync, skew) }

@@ -21,10 +21,6 @@ object ApiClient {
         }
         val client = OkHttpClient.Builder()
             .addInterceptor { chain ->
-                // Where the phone is, said once per request rather than on
-                // every message in it. Read at send time, so a handset that
-                // crosses a border -- or a daylight-saving boundary -- is
-                // describing itself as it is now, not as it was at install.
                 val now = TimeUtils.nowMs()
                 val request = chain.request().newBuilder()
                     .addHeader("X-API-Key", apiKey)

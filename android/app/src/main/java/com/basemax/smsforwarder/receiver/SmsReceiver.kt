@@ -38,11 +38,6 @@ class SmsReceiver : BroadcastReceiver() {
             val ts = part.timestampMillis
             timestamps[address] = minOf(timestamps[address] ?: ts, ts)
         }
-        // part.timestampMillis is the service centre's timestamp: an absolute
-        // instant, the same number whatever zone the phone is set to. It is
-        // normalised rather than trusted outright, because a few carriers
-        // report it in seconds, and it is passed on unshifted -- the offset
-        // below describes where the phone was, it does not adjust the instant.
         val now = TimeUtils.nowMs()
         val zone = ZoneId.systemDefault()
         return bodies.map { (address, body) ->

@@ -32,26 +32,11 @@ class BackupManager(
         return response.stored
     }
 
-    /**
-     * Upload everything the SMS provider has gained since the last sweep.
-     *
-     * The cursor is kept in the provider's raw units and only ever advanced
-     * from what the provider itself returned, so it stays comparable with the
-     * `DATE > ?` it is fed back into. The "last sync" the user sees is a
-     * separate value -- an actual instant, written when the sweep finishes --
-     * because the two answer different questions and conflating them made
-     * "Last sync" show the date of the newest text rather than of the sync.
-     */
     suspend fun sweep(): Int {
         val api = api() ?: return 0
         val startCursor = settings.syncCursor.first()
         val device = settings.deviceId.first()
 
-        // The query anchor stays put for the whole sweep and paging happens on
-        // `offset` alone. Advancing both would step twice per page and skip
-        // messages. The new cursor is accumulated separately and written once,
-        // at the end, so an upload that fails halfway leaves the stored
-        // position untouched and the next sweep retries from the same place.
         var offset = 0
         var newest = startCursor
         var stored = 0
@@ -86,15 +71,6 @@ class BackupManager(
         }
     }
 
-    /**
-     * Note that a sync happened, and how far this phone's clock is from the
-     * server's.
-     *
-     * The skew is measured against the moment the request was sent rather than
-     * the moment the reply arrived, so a slow network shows up as latency and
-     * not as a wrong clock. Only the round trip's own duration is left in it,
-     * which is why the tolerance the UI applies is generous.
-     */
     private suspend fun recordSync(response: IngestResponse, sentAtMs: Long) {
         settings.setLastSyncAt(TimeUtils.nowMs())
         if (response.serverTimeMs <= 0L) return

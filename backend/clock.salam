@@ -1,40 +1,9 @@
-/*
- * SMS Forwarder backend - the one place that knows what an instant is.
- *
- * THE RULE, in one line: every instant in this service - on the wire, in the
- * database, in a Telegram alert - is UTC epoch MILLISECONDS. There is no
- * local time anywhere in the storage or the query path.
- *
- * That matters because the phones are not in one place. A handset in Tehran
- * (UTC+03:30), one in Kabul (UTC+04:30) and one in New York (UTC-05:00) all
- * upload to the same server, and two of those are half-hour offsets that a
- * "just store whatever arrived" design gets wrong the moment anything is
- * rendered. Epoch milliseconds are already an absolute point in time - they
- * carry no zone and need none - so the job here is not to convert anything.
- * It is to make sure nothing ever arrives in a different unit, or from a
- * broken clock, and gets mistaken for a good epoch-ms value. That is what
- * NormalizeMs does, and it is the only door into the store.
- *
- * The wall-clock reading the owner of the phone actually saw is not thrown
- * away: the app sends the device's UTC offset alongside each message, and
- * Local() reconstructs that reading from the UTC instant. An offset, not a
- * zone name, is all a rendering needs, so the server never has to carry a
- * timezone database or care which country a handset was in.
- *
- * Nothing here reads the machine's own timezone. Where the server happens to
- * be hosted is an accident, and it must never change what a value means.
- */
-
 package clock
 
 import time
 import conv
 import parse "parse.salam"
 
-// 2000-01-01T00:00:00Z expressed in each of the four units a client might
-// plausibly send. Nothing older than that is a real SMS timestamp, and the
-// four bands do not overlap, so the unit of an incoming number is recoverable
-// from its magnitude alone - which is the whole trick behind NormalizeMs.
 const SEC_FLOOR := 946684800 as i64
 const MS_FLOOR := 946684800000 as i64
 const US_FLOOR := 946684800000000 as i64
@@ -45,21 +14,12 @@ const MS_PER_MINUTE := 60000 as i64
 const US_PER_MS := 1000 as i64
 const NS_PER_MS := 1000000 as i64
 
-// A timestamp more than a day ahead of the server is a broken clock, not a
-// message from the future.
 const FUTURE_SLACK_MS := 86400000 as i64
 
-// The real range of UTC offsets in use is -12:00 (Baker Island) to +14:00
-// (Kiritimati). Anything outside it is a client bug or a hostile value, and
-// is read as "did not say", i.e. UTC.
 const MIN_OFFSET_MINUTES := 0 - 720
 const MAX_OFFSET_MINUTES := 840
 
-// A zone name is only ever echoed back, never interpreted, but it still
-// travels into SQLite and into Telegram, so it is length-capped here.
 const MAX_ZONE_NAME := 64
-
-// ---------------------------------------------------------------- helpers
 
 func _pad2(n: int): str:
     s := conv.FormatInt(n as i64)
@@ -74,26 +34,19 @@ func _pad3(n: int): str:
     ret s
 end
 
-// Floor division, so an instant before 1970 splits into whole seconds and a
-// non-negative remainder instead of rounding toward zero the way `/` does.
 func _floor_div(a: i64, b: i64): i64:
     mut q := a / b
     if a % b != 0 as i64 && (a < 0 as i64) != (b < 0 as i64): q -= 1 as i64 end
     ret q
 end
 
-// "2026-08-29T12:34:56.789" for an instant already shifted into whatever
-// frame it is to be printed in. The suffix naming that frame is the caller's
-// to add - which is the only difference between UTC() and Local().
 func _civil(ms: i64): str:
     seconds := _floor_div(ms, MS_PER_SECOND)
     millis := (ms - seconds * MS_PER_SECOND) as int
     iso := time.FormatISOUTC(seconds)
-    // FormatISOUTC ends in "Z"; the fraction goes where that Z was.
     ret iso.substr(0, iso.len() - 1) + "." + _pad3(millis)
 end
 
-// An optionally negative run of decimal digits, and nothing else.
 func _is_digits(s: str): bool:
     n := s.len()
     if n == 0: ret false end
@@ -108,38 +61,10 @@ func _is_digits(s: str): bool:
     ret true
 end
 
-// ---------------------------------------------------------------- now
-
-// The server's own clock, in the unit everything else uses. This is the
-// service's reference frame: when a phone cannot be believed, its messages
-// land here instead.
 pub func NowMs(): i64:
     ret time.Now() * MS_PER_SECOND
 end
 
-// ---------------------------------------------------------------- normalising
-
-// Whatever a client sent for "when", as UTC epoch milliseconds.
-//
-// Two different mistakes are corrected here, and they are the two that
-// actually happen in the field:
-//
-//   Wrong unit. Android's SMS provider hands out milliseconds, but plenty of
-//     SMS gateways, phone exports and hand-written scripts hand out seconds -
-//     and a seconds value read as milliseconds lands in January 1970. The
-//     magnitude bands above sort seconds, milliseconds, microseconds and
-//     nanoseconds apart with no ambiguity anywhere in the next ten thousand
-//     years, so all four are accepted and all four leave as milliseconds.
-//
-//   Broken clock. A phone whose date was never set, or was set to 2035, would
-//     otherwise poison both the ordering and the de-duplication key. Anything
-//     before 2000, or more than a day past the server's own clock, is
-//     replaced by `now_ms`: the message is still stored, still de-duplicated,
-//     and lands at ingest time rather than in a wrong century.
-//
-// Note what is deliberately NOT done: no timezone is applied. The number
-// already names an absolute instant, so shifting it by an offset - the
-// phone's or the server's - would be the bug, not the fix.
 pub func NormalizeMs(v: i64, now_ms: i64): i64:
     mut ms := 0 as i64
     if v >= NS_FLOOR:
@@ -157,34 +82,23 @@ pub func NormalizeMs(v: i64, now_ms: i64): i64:
             end
         end
     end
-    // Below the 2000 floor - which covers 0, negatives, and every value too
-    // small to place in a band - or implausibly far ahead: use the server.
     if ms < MS_FLOOR: ret now_ms end
     if ms > now_ms + FUTURE_SLACK_MS: ret now_ms end
     ret ms
 end
 
-// A device's UTC offset in minutes, or 0 when it did not say or said
-// something impossible. 0 reads as UTC, which is also what a client that
-// never sends the field gets.
 pub func NormalizeOffsetMinutes(v: i64): int:
     if v < MIN_OFFSET_MINUTES as i64: ret 0 end
     if v > MAX_OFFSET_MINUTES as i64: ret 0 end
     ret v as int
 end
 
-// A zone name, trimmed and capped. Never parsed - the offset does the work;
-// the name is only so a person reading a row or an alert knows where the
-// phone was.
 pub func NormalizeZoneName(s: str): str:
     t := s.trim()
     if t.len() > MAX_ZONE_NAME: ret t.substr(0, MAX_ZONE_NAME) end
     ret t
 end
 
-// ---------------------------------------------------------------- formatting
-
-// "+03:30", "-05:00", or "Z" for UTC itself.
 pub func FormatOffset(offset_minutes: int): str:
     if offset_minutes == 0: ret "Z" end
     mut sign := "+"
@@ -196,40 +110,14 @@ pub func FormatOffset(offset_minutes: int): str:
     ret sign + _pad2(v / 60) + ":" + _pad2(v % 60)
 end
 
-// RFC 3339 in UTC, to the millisecond: "2026-08-29T12:34:56.789Z". Every
-// timestamp an API response spells out is in this form, so a client that
-// cannot be bothered with epoch arithmetic still gets an unambiguous instant.
 pub func UTC(ms: i64): str:
     ret _civil(ms) + "Z"
 end
 
-// The same instant as the phone's own clock showed it:
-// "2026-08-29T16:04:56.789+03:30". Not a different time - the same point in
-// time, written in a different frame, with the offset naming that frame, so
-// the string still parses back to the identical instant.
 pub func Local(ms: i64, offset_minutes: int): str:
     ret _civil(ms + (offset_minutes as i64) * MS_PER_MINUTE) + FormatOffset(offset_minutes)
 end
 
-// ---------------------------------------------------------------- parsing
-
-// An instant written by a client, as UTC epoch milliseconds.
-//
-// Two spellings are accepted, because the two kinds of caller are different:
-// the app sends back a number it already holds, and a person with curl would
-// much rather type a date. So:
-//
-//   ""                          -> `fallback`
-//   "0", or negative            -> 0, meaning "from the beginning"
-//   "1735689600000"             -> a number, through NormalizeMs
-//   "2025-01-01T00:00:00Z"      -> the instant it names
-//   "2025-01-01T03:30:00+03:30" -> the same instant, written in Tehran
-//   "2025-01-01"                -> midnight UTC that day
-//   anything else               -> `fallback`
-//
-// An ISO string carrying NO offset is read as UTC rather than as the
-// server's local time: where the server happens to be running must never
-// change what a value means.
 pub func ParseInstantMs(s: str, fallback: i64): i64:
     t := s.trim()
     if t.len() == 0: ret fallback end

@@ -51,7 +51,6 @@ private val DarkColors = darkColorScheme(
     error = Color(0xFFFFB4AB),
 )
 
-
 val WarnColor = Color(0xFFEBA000)
 
 @Composable

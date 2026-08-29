@@ -17,12 +17,6 @@ data class HomeUiState(
 ) {
     val isConfigured: Boolean get() = baseUrl.isNotBlank() && apiKey.isNotBlank()
 
-    /**
-     * True when this phone's clock is far enough from the server's to be
-     * worth telling its owner about. A wrong date does not stop a backup, but
-     * it does file every message under the wrong day, so it is the one clock
-     * problem the app surfaces rather than silently correcting.
-     */
     val clockIsOff: Boolean
         get() = abs(clockSkewMs) > TimeUtils.CLOCK_SKEW_TOLERANCE_MS
 }

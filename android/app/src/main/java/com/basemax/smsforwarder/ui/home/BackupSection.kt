@@ -36,16 +36,10 @@ fun BackupSection(
         StatusRow(
             icon = Icons.Rounded.Sync,
             label = "Last sync",
-            // In this phone's own timezone, and labelled with it: everything
-            // that travels to the server is UTC, and this screen is the one
-            // place that turns an instant back into local time.
             value = if (state.lastSyncMs <= 0L) "Never"
             else TimeUtils.formatForPeople(state.lastSyncMs),
             ok = state.lastSyncMs > 0L,
         )
-        // Shown only when it is a problem. Messages are still backed up with a
-        // wrong clock -- they are simply filed under the wrong day, and this
-        // is the only warning the user would otherwise ever get.
         if (state.clockIsOff) {
             StatusRow(
                 icon = Icons.Rounded.Schedule,
@@ -66,14 +60,6 @@ fun BackupSection(
     }
 }
 
-/**
- * "4 min behind server" / "2 h ahead of server".
- *
- * Phrased as a difference from the server rather than as a timezone, because
- * a timezone is never the cause: both clocks are compared as UTC instants, so
- * a gap means the date on this phone is genuinely wrong, not that it is set
- * to a different country.
- */
 private fun describeSkew(skewMs: Long): String {
     val magnitude = abs(skewMs)
     val amount = when {
