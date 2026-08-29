@@ -1,0 +1,95 @@
+/*
+ * SMS Forwarder backend — the ingest path.
+ *
+ * One request body in, one Report out. The same endpoint serves the phone's
+ * real-time push and its daily bulk sync, so a body may be one message
+ * object, an array of them, or { "messages": [ ... ] }; all three converge on
+ * _one() below, which is the only function that knows what a message is.
+ *
+ * Re-uploading a message already stored is harmless: the store de-duplicates
+ * and reports whether a row was genuinely new, and only a genuinely new
+ * *inbound* message raises a Telegram alert.
+ */
+
+package ingest
+
+import encoding.json
+import encoding.value
+import encoding.encerr
+import parse "parse.salam"
+import store "store.salam"
+import notify "notify.salam"
+
+// What one request did. `received` is every message the body carried, and it
+// always equals stored + duplicates.
+pub struct Report:
+    pub received: int = 0
+    pub stored: int = 0
+    pub duplicates: int = 0
+end
+
+// Count one message, on whichever side it landed. Every path through this
+// file goes through here, so the three totals cannot drift apart.
+func _count(rep &: Report, created: bool):
+    rep.received += 1
+    if created:
+        rep.stored += 1
+    else:
+        rep.duplicates += 1
+    end
+end
+
+// Store one message object. Returns true only when a new row was created.
+func _one(item: value.Value, default_device: str): bool:
+    if !value.IsObject(item): ret false end
+    address := parse.Text(item, "address")
+    text := parse.Text(item, "body")
+    // Nothing to store if both the sender and the text are empty.
+    if text.len() == 0 && address.len() == 0: ret false end
+    device := parse.TextOr(item, "device", default_device)
+    date := parse.Number(item, "date")
+    // 1 = received/inbox, 2 = sent. A missing type means inbox.
+    mut kind := parse.Number(item, "type") as int
+    if kind == 0: kind = 1 end
+    mut id := 0 as i64
+    created := store.SaveSms(device, address, text, date, kind, id)
+    if created && kind == 1:
+        notify.SmsAlert(address, text)
+    end
+    ret created
+end
+
+func _array(arr: value.Value, default_device: str, rep &: Report):
+    repeat value.ArrayLen(arr) with i:
+        _count(rep, _one(value.ArrayGet(arr, i), default_device))
+    end
+end
+
+// The three accepted body shapes, reduced to the one that matters.
+func _walk(v: value.Value, default_device: str, rep &: Report):
+    if value.IsArray(v):
+        _array(v, default_device, rep)
+        ret
+    end
+    if value.IsObject(v) && value.ObjectHas(v, "messages"):
+        _array(value.ObjectGet(v, "messages"), default_device, rep)
+        ret
+    end
+    _count(rep, _one(v, default_device))
+end
+
+// Decode a request body and store what it carries. Returns false, leaving
+// `rep` untouched, when the body is not JSON. `default_device` labels any
+// message that does not name its own device.
+pub func Request(body: str, default_device: str, rep &: Report): bool:
+    mut e := encerr.NoError()
+    mut v := json.Decode(body, e)
+    mut ok := true
+    if encerr.IsError(e):
+        ok = false
+    else:
+        _walk(v, default_device, rep)
+    end
+    value.ValueFree(v)
+    ret ok
+end

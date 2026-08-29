@@ -1,0 +1,8 @@
+# Build output
+sms-backend
+.salam-build/
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+.env

@@ -1,0 +1,94 @@
+/*
+ * SMS Forwarder backend — the routes.
+ *
+ *   POST /api/sms     ingest one or many messages (real-time push OR the
+ *                     daily bulk sync — same endpoint, de-dup makes re-sends
+ *                     harmless). On each genuinely new inbound message it
+ *                     raises a Telegram alert.
+ *   GET  /api/sms     read messages back (the restore path for a new phone):
+ *                     ?since=<epoch_ms>&limit=<=1000&offset=
+ *   GET  /api/stats   how many messages are stored
+ *   GET  /health      liveness, unauthenticated
+ *
+ * Every route except /health requires the shared secret in the X-API-Key
+ * header. Each handler below is the same four steps — authenticate, read the
+ * request, call one collaborator, send a struct — because the work itself
+ * lives in api.salam, ingest.salam and store.salam. There is no SQL here, no
+ * Telegram call, and no JSON text.
+ */
+
+package routes
+
+import net.http
+import net.router
+import api "api.salam"
+import ingest "ingest.salam"
+import store "store.salam"
+import notify "notify.salam"
+
+const PAGE_DEFAULT := 100
+const PAGE_MAX := 1000
+
+// The shapes the read paths answer with. Like store.Sms, each one IS its wire
+// format: json.Marshal derives the encoder from the fields.
+pub struct Page:
+    pub items: Vector<store.Sms> = Vector {} as Vector<store.Sms>
+    // Total matching `since`, so a client can page through it.
+    pub count: i64 = 0
+end
+
+pub struct Stats:
+    pub total: i64 = 0
+end
+
+pub struct Health:
+    pub status: str = "ok"
+    pub service: str = "sms-forwarder"
+    pub notifications: bool = false
+end
+
+// POST /api/sms
+func _create_sms(ctx: i64):
+    if !api.Authorized(ctx): ret end
+    body := http.Ctx_body(ctx)
+    if body.len() == 0:
+        api.Fail(ctx, 400, "empty request body")
+        ret
+    end
+    // A device label may be given once for the whole request instead of on
+    // every message in it.
+    mut rep := ingest.Report {}
+    if !ingest.Request(body, http.Ctx_header(ctx, "X-Device-Id"), rep):
+        api.Fail(ctx, 400, "invalid JSON")
+        ret
+    end
+    api.Send(ctx, 200, rep)
+end
+
+// GET /api/sms
+func _list_sms(ctx: i64):
+    if !api.Authorized(ctx): ret end
+    since := api.QueryI64(ctx, "since", 0 as i64)
+    limit := api.QueryLimit(ctx, "limit", PAGE_DEFAULT, PAGE_MAX)
+    offset := api.QueryCount(ctx, "offset")
+    api.Send(ctx, 200, Page { items = store.ListSms(since, limit, offset), count = store.CountSince(since) })
+end
+
+// GET /api/stats
+func _stats(ctx: i64):
+    if !api.Authorized(ctx): ret end
+    api.Send(ctx, 200, Stats { total = store.CountAll() })
+end
+
+// GET /health — the one route that answers without a key.
+func _health(ctx: i64):
+    api.Send(ctx, 200, Health { notifications = notify.Enabled() })
+end
+
+// The whole public surface of the service, in one place.
+pub func Register(r &: router.Router):
+    router.Post(r, "/api/sms", _create_sms)
+    router.Get(r, "/api/sms", _list_sms)
+    router.Get(r, "/api/stats", _stats)
+    router.Get(r, "/health", _health)
+end

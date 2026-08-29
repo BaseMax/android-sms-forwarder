@@ -1,0 +1,48 @@
+/*
+ * SMS Forwarder backend — startup.
+ *
+ * A tiny JSON API a phone talks to: it receives SMS, stores them in SQLite,
+ * and pings the owner on Telegram when a new one arrives. See routes.salam
+ * for the endpoints and the message shape.
+ *
+ * This file only wires the parts together, in the order they depend on each
+ * other, and refuses to start when something required is missing:
+ *
+ *   config  →  store  →  notify  →  routes  →  server
+ */
+
+package main
+
+import net.http
+import net.router
+import api "api.salam"
+import config "config.salam"
+import routes "routes.salam"
+import store "store.salam"
+import notify "notify.salam"
+
+func main:
+    cfg := config.FromEnv()
+    if cfg.api_key.len() == 0:
+        println "refusing to start: set API_KEY to the shared secret the phone sends as X-API-Key"
+        ret 1
+    end
+    if !store.Init(cfg.db_path):
+        println "cannot open the SQLite database at ", cfg.db_path
+        ret 1
+    end
+    defer store.Close()
+    api.UseKey(cfg.api_key)
+    if notify.Init(cfg.bot_token, cfg.chat_id):
+        println "telegram alerts: on"
+    else:
+        println "telegram alerts: off (set BOT_TOKEN and TELEGRAM_CHAT_ID to enable)"
+    end
+    mut r := router.NewRouter()
+    routes.Register(r)
+    mut s := http.NewServer(cfg.port)
+    http.Use(s, r)
+    println "SMS forwarder API listening on port", cfg.port
+    http.Run(s)
+    ret 0
+end

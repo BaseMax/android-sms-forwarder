@@ -1,0 +1,74 @@
+/*
+ * SMS Forwarder backend — the HTTP conventions every route shares.
+ *
+ * How a reply is written, how a caller is authenticated, how a query
+ * parameter is read. The handlers in routes.salam do none of this themselves,
+ * so there is one place where the status code, the CORS header, the JSON
+ * encoding and the 401 are decided.
+ */
+
+package api
+
+import crypto
+import net.http
+import encoding.json
+import parse "parse.salam"
+
+// The shared secret. Set once from main, on the main thread, before the first
+// request thread exists; only compared afterwards.
+mut _key := ""
+
+// The only shape this file emits itself.
+pub struct Error:
+    pub error: str = ""
+end
+
+pub func UseKey(key: str):
+    _key = key
+end
+
+// One exit for every reply. Generic, so json.Marshal derives an encoder for
+// each payload type at compile time and no handler ever sees JSON text: a
+// response is built by filling in a struct, never by concatenating strings.
+pub func Send<T>(ctx: i64, code: int, payload: T):
+    http.Ctx_status(ctx, code)
+    http.Ctx_set_header(ctx, "Access-Control-Allow-Origin", "*")
+    http.Ctx_json(ctx, json.Marshal(payload))
+end
+
+pub func Fail(ctx: i64, code: int, message: str):
+    Send(ctx, code, Error { error = message })
+end
+
+// Constant-time check of the X-API-Key header. Writes the 401 itself, so a
+// handler's first line is `if !api.Authorized(ctx): ret end`.
+pub func Authorized(ctx: i64): bool:
+    if crypto.SecretEquals(http.Ctx_header(ctx, "X-API-Key"), _key): ret true end
+    Fail(ctx, 401, "unauthorized")
+    ret false
+end
+
+// ---------------------------------------------------------------- query
+
+// A query parameter as a full-width integer, `fallback` when it is absent.
+pub func QueryI64(ctx: i64, name: str, fallback: i64): i64:
+    raw := http.Ctx_query(ctx, name)
+    if raw.len() == 0: ret fallback end
+    ret parse.I64(raw)
+end
+
+// A page size: `fallback` when the parameter is absent or not positive, and
+// never more than `max`, so no caller can ask for the whole table at once.
+pub func QueryLimit(ctx: i64, name: str, fallback: int, max: int): int:
+    v := QueryI64(ctx, name, 0 as i64) as int
+    if v <= 0: ret fallback end
+    if v > max: ret max end
+    ret v
+end
+
+// A count that cannot go below zero.
+pub func QueryCount(ctx: i64, name: str): int:
+    v := QueryI64(ctx, name, 0 as i64) as int
+    if v < 0: ret 0 end
+    ret v
+end

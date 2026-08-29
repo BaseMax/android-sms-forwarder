@@ -1,0 +1,158 @@
+/*
+ * SMS Forwarder backend — storage layer (SQLite).
+ *
+ * Every line of SQL in the service lives here. routes.salam speaks HTTP and
+ * calls into this package; it never builds a query itself. Values reach SQL
+ * only through bound parameters (BindText / BindInt), so there is no string
+ * concatenation of user input into a statement anywhere in the program.
+ *
+ * The HTTP server handles each connection on its own thread, so a single
+ * shared SQLite handle is guarded by one process-wide mutex: every operation
+ * locks it, touches the database, and unlocks. For a personal SMS feed the
+ * traffic is tiny and serialising it is simpler and safer than a pool.
+ */
+
+package store
+
+import db.sqlite
+import sync
+
+// Connection + the lock that serialises access to it. Both are set once in
+// Init(), on the main thread, before the first request thread exists, and
+// only read afterwards (apart from the queries, which hold the lock).
+mut _db := sqlite.Database {}
+mut _lock := sync.Mutex {}
+mut _ready := false
+
+// ---------------------------------------------------------------- the row
+
+// One stored message.
+//
+// This struct IS the wire format: json.Marshal derives an encoder for this
+// exact type at compile time (no reflection, no runtime type tags), so the
+// field names and their order are what a client sees. Adding a column means
+// adding a field here and reading it in _row below -- there is no separate
+// serialiser to keep in step, and no place for the two to drift apart.
+//
+// `date` and `received_at` stay i64 and go out as bare JSON numbers, which is
+// what this API has always sent on the read path. (The ingest side is the one
+// that wants timestamps as strings; see main.salam.)
+pub struct Sms:
+    pub id: i64 = 0
+    pub device: str = ""
+    pub address: str = ""
+    pub body: str = ""
+    pub date: i64 = 0
+    pub type: int = 1
+    pub received_at: i64 = 0
+end
+
+// ---------------------------------------------------------------- helpers
+
+// The current row of the SELECT below, in column order.
+func _row(rows: sqlite.Rows): Sms:
+    ret Sms {
+        id = sqlite.Int64(rows, 0),
+        device = sqlite.Text(rows, 1),
+        address = sqlite.Text(rows, 2),
+        body = sqlite.Text(rows, 3),
+        date = sqlite.Int64(rows, 4),
+        type = sqlite.Int(rows, 5),
+        received_at = sqlite.Int64(rows, 6)
+    }
+end
+
+// ---------------------------------------------------------------- lifecycle
+
+// Open the database file and create the schema if it is missing. Returns
+// false (without marking the store ready) when SQLite is unavailable or the
+// file cannot be opened, so main can refuse to start.
+pub func Init(path: str): bool:
+    if !sqlite.Available(): ret false end
+    _db = sqlite.Open(path)
+    if !sqlite.Ok(_db): ret false end
+    _lock = sync.NewMutex()
+    // WAL lets a reader and a writer coexist; the busy timeout absorbs the
+    // brief contention two uploads can still create.
+    sqlite.Exec(_db, "PRAGMA journal_mode=WAL")
+    sqlite.Exec(_db, "PRAGMA busy_timeout=5000")
+    sqlite.Exec(_db, "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', date INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 1, received_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))")
+    sqlite.Exec(_db, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
+    sqlite.Exec(_db, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
+    _ready = true
+    ret true
+end
+
+pub func Ready(): bool:
+    ret _ready
+end
+
+pub func Close():
+    if _ready: sqlite.Close(_db) end
+end
+
+// ---------------------------------------------------------------- writes
+
+// Insert one message, ignoring it if an identical one is already stored.
+// Returns true only when a NEW row was created (so the caller knows whether
+// to raise a Telegram alert), and writes the new row id into out_id.
+pub func SaveSms(device: str, address: str, body: str, date: i64, kind: int, out_id &: i64): bool:
+    out_id = 0 as i64
+    sync.Lock(_lock)
+    ins := sqlite.Prepare(_db, "INSERT OR IGNORE INTO messages(device, address, body, date, type) VALUES (?, ?, ?, ?, ?)")
+    sqlite.BindText(ins, 1, device)
+    sqlite.BindText(ins, 2, address)
+    sqlite.BindText(ins, 3, body)
+    sqlite.BindInt(ins, 4, date)
+    sqlite.BindInt(ins, 5, kind as i64)
+    sqlite.Next(ins)
+    sqlite.Finish(ins)
+    changed := sqlite.Changes(_db)
+    mut created := false
+    if changed > 0:
+        created = true
+        out_id = sqlite.LastInsertId(_db)
+    end
+    sync.Unlock(_lock)
+    ret created
+end
+
+// ---------------------------------------------------------------- reads
+
+// A page of stored messages, newest first, restricted to messages whose
+// device timestamp is at or after `since` (0 = everything). This is the
+// restore path a new phone calls to pull its history back.
+//
+// The caller gets rows, not text: turning them into JSON is the HTTP layer's
+// job, and one json.Marshal there covers the whole response envelope.
+pub func ListSms(since: i64, limit: int, offset: int): Vector<Sms>:
+    mut out := Vector {} as Vector<Sms>
+    sync.Lock(_lock)
+    rows := sqlite.Prepare(_db, "SELECT id, device, address, body, date, type, received_at FROM messages WHERE date >= ? ORDER BY date DESC, id DESC LIMIT ? OFFSET ?")
+    sqlite.BindInt(rows, 1, since)
+    sqlite.BindInt(rows, 2, limit as i64)
+    sqlite.BindInt(rows, 3, offset as i64)
+    until sqlite.Next(rows):
+        out.push(_row(rows))
+    end
+    sqlite.Finish(rows)
+    sync.Unlock(_lock)
+    ret out
+end
+
+// Total messages, and messages at/after `since`. Kept in one round trip
+// through the lock so /api/stats is a single acquire.
+pub func CountSince(since: i64): i64:
+    sync.Lock(_lock)
+    rows := sqlite.Prepare(_db, "SELECT COUNT(*) FROM messages WHERE date >= ?")
+    sqlite.BindInt(rows, 1, since)
+    mut v := 0 as i64
+    if sqlite.Next(rows): v = sqlite.Int64(rows, 0) end
+    sqlite.Finish(rows)
+    sync.Unlock(_lock)
+    ret v
+end
+
+pub func CountAll(): i64:
+    ret CountSince(0 as i64)
+end

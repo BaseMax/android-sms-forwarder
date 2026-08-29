@@ -1,0 +1,51 @@
+/*
+ * SMS Forwarder backend — Telegram notifier.
+ *
+ * When a genuinely new inbound SMS is stored, the service pushes a short
+ * message to the owner's own Telegram chat, via a bot. The bot token and the
+ * destination chat id come from the environment, so the secret never lives in
+ * the phone or the repository:
+ *
+ *   BOT_TOKEN         from @BotFather
+ *   TELEGRAM_CHAT_ID  your own numeric chat id (talk to @userinfobot to find it)
+ *
+ * If either is missing the notifier stays disabled and the API still works;
+ * the SMS is stored either way.
+ */
+
+package notify
+
+import telegram.bot
+
+// Set once in Init(), read from request threads afterwards.
+mut _bot := bot.Bot {}
+mut _chat := 0 as i64
+mut _enabled := false
+
+// Wire up the bot. Returns false (and leaves the notifier disabled) when the
+// token or chat id is absent, so main can log that alerts are off without
+// treating it as a fatal error.
+pub func Init(token: str, chat_id: i64): bool:
+    if token.len() == 0 || chat_id == 0 as i64:
+        _enabled = false
+        ret false
+    end
+    _bot = bot.NewBot(token)
+    _chat = chat_id
+    _enabled = true
+    ret true
+end
+
+pub func Enabled(): bool:
+    ret _enabled
+end
+
+// Fire-and-forget alert for one received SMS. The API response does not
+// depend on Telegram succeeding, so the result is intentionally ignored.
+pub func SmsAlert(address: str, body: str):
+    if !_enabled: ret end
+    mut from := address
+    if from.len() == 0: from = "(unknown)" end
+    text := "New SMS received\n\nFrom: " + from + "\n\n" + body
+    bot.SendMessage(_bot, _chat, text)
+end

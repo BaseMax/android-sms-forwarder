@@ -1,0 +1,45 @@
+/*
+ * SMS Forwarder backend — configuration.
+ *
+ * Every setting the service has, read from the environment once at startup.
+ * No other file calls os.Env, so what the service can be configured with is
+ * the Config struct below and nothing else.
+ *
+ *   API_KEY           shared secret the phone sends as X-API-Key (required)
+ *   DB_PATH           SQLite file                        (default sms.db)
+ *   PORT              listen port                        (default 8080)
+ *   BOT_TOKEN         Telegram bot token                 (optional)
+ *   TELEGRAM_CHAT_ID  destination chat id                (optional)
+ */
+
+package config
+
+import os
+import parse "parse.salam"
+
+pub struct Config:
+    pub api_key: str = ""
+    pub db_path: str = "sms.db"
+    pub port: int = 8080
+    pub bot_token: str = ""
+    pub chat_id: i64 = 0
+end
+
+// An environment variable, or `fallback` when it is unset or empty.
+func _text(name: str, fallback: str): str:
+    v := os.Env(name)
+    if v.len() == 0: ret fallback end
+    ret v
+end
+
+pub func FromEnv(): Config:
+    ret Config {
+        api_key = os.Env("API_KEY"),
+        db_path = _text("DB_PATH", "sms.db"),
+        port = parse.I64(_text("PORT", "8080")) as int,
+        bot_token = os.Env("BOT_TOKEN"),
+        // A supergroup chat id does not fit in 32 bits, so it is parsed at
+        // full width like every other number the service reads.
+        chat_id = parse.I64(os.Env("TELEGRAM_CHAT_ID"))
+    }
+end
