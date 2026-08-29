@@ -4,6 +4,6 @@
     <!-- Foreground service notification channel + texts -->
     <string name="channel_status_name">Backup service</string>
     <string name="channel_status_desc">Keeps SMS backup running in the background.</string>
-    <string name="service_active">Watching for SMS · backing up in the background</string>
-    <string name="service_idle">Running · add your server to start backing up</string>
+    <string name="service_active">Watching for SMS, backing up in the background</string>
+    <string name="service_idle">Running, add your server to start backing up</string>
 </resources>

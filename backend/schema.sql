@@ -1,4 +1,4 @@
--- SMS Forwarder — SQLite schema
+-- SMS Forwarder - SQLite schema
 --
 -- One row per stored SMS. The application creates these objects at startup
 -- (see store.salam / Init), so this file is documentation and a way to

@@ -1,5 +1,5 @@
 /*
- * SMS Forwarder backend — storage layer (SQLite).
+ * SMS Forwarder backend - storage layer (SQLite).
  *
  * Every line of SQL in the service lives here. routes.salam speaks HTTP and
  * calls into this package; it never builds a query itself. Values reach SQL
@@ -7,15 +7,43 @@
  * concatenation of user input into a statement anywhere in the program.
  *
  * The HTTP server handles each connection on its own thread, so a single
- * shared SQLite handle is guarded by one process-wide mutex: every operation
- * locks it, touches the database, and unlocks. For a personal SMS feed the
- * traffic is tiny and serialising it is simpler and safer than a pool.
+ * shared SQLite handle is guarded by one process-wide mutex. Every public
+ * function here takes that lock once, on entry, and releases it on the way
+ * out; the private helpers below assume it is already held, which is what
+ * lets a page of rows and its total be read as one consistent snapshot. For
+ * a personal SMS feed the traffic is tiny and serialising it is simpler and
+ * safer than a pool.
+ *
+ * TIME. Both instants in a row - `date` and `received_at` - are UTC epoch
+ * milliseconds, in the same unit, and the server writes `received_at` from
+ * its own clock rather than leaving it to a SQL default. `tz_offset` is the
+ * phone's UTC offset in minutes when the message happened; it is carried so
+ * a reader can be shown the wall-clock time the phone showed, and it never
+ * takes part in ordering, filtering or de-duplication. See clock.salam.
  */
 
 package store
 
 import db.sqlite
 import sync
+import clock "clock.salam"
+
+// Schema generation. Bumped whenever _upgrade() gains a step; the number
+// lives in the database file as PRAGMA user_version.
+const SCHEMA_VERSION := 1
+
+// The table as it stands today. A database created fresh gets exactly this
+// and is stamped as current; an older file is brought up to it by _upgrade().
+const CREATE_MESSAGES := "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', date INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 1, received_at INTEGER NOT NULL DEFAULT 0, tz_offset INTEGER NOT NULL DEFAULT 0, tz_name TEXT NOT NULL DEFAULT '')"
+
+// The columns _row() reads, in the order it reads them. Any query that
+// yields an Sms selects exactly this.
+const COLUMNS := "id, device, address, body, date, type, received_at, tz_offset, tz_name"
+
+// The one predicate the read paths share. The rows in a page and the count
+// beside it are selected with the same text, so they cannot come to mean two
+// different things.
+const MATCHING := " FROM messages WHERE date >= ?"
 
 // Connection + the lock that serialises access to it. Both are set once in
 // Init(), on the main thread, before the first request thread exists, and
@@ -24,45 +52,156 @@ mut _db := sqlite.Database {}
 mut _lock := sync.Mutex {}
 mut _ready := false
 
-// ---------------------------------------------------------------- the row
-
 // One stored message.
 //
 // This struct IS the wire format: json.Marshal derives an encoder for this
 // exact type at compile time (no reflection, no runtime type tags), so the
 // field names and their order are what a client sees. Adding a column means
-// adding a field here and reading it in _row below -- there is no separate
-// serialiser to keep in step, and no place for the two to drift apart.
+// adding a field here, a name to COLUMNS and a line to _row -- there is no
+// separate serialiser to keep in step, and no place for the two to drift.
 //
-// `date` and `received_at` stay i64 and go out as bare JSON numbers, which is
-// what this API has always sent on the read path. (The ingest side is the one
-// that wants timestamps as strings; see main.salam.)
+// `date` and `received_at` are i64 UTC epoch milliseconds and go out as bare
+// JSON numbers. The three `*_utc` / `date_local` strings beside them are not
+// columns: _row derives them from those numbers so that a client - or a
+// person reading the JSON - never has to guess a unit or a zone. `id` and
+// `received_at` are the database's to fill in and are ignored by Save().
 pub struct Sms:
     pub id: i64 = 0
     pub device: str = ""
     pub address: str = ""
     pub body: str = ""
     pub date: i64 = 0
+    pub date_utc: str = ""
+    pub date_local: str = ""
     pub type: int = 1
+    pub tz_offset_minutes: int = 0
+    pub tz_name: str = ""
     pub received_at: i64 = 0
+    pub received_at_utc: str = ""
+end
+
+// A page of messages and the total it was drawn from, so a client can page
+// through without a second request. The server's own clock rides along:
+// a phone can compare it against its own and tell that its date is wrong,
+// and a client paging forward can use it as the next `since` instead of
+// trusting a local clock it has no reason to trust.
+pub struct Page:
+    pub items: Vector<Sms> = Vector {} as Vector<Sms>
+    pub count: i64 = 0
+    pub since: i64 = 0
+    pub since_utc: str = ""
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
 end
 
 // ---------------------------------------------------------------- helpers
+//
+// These assume the caller already holds _lock.
 
-// The current row of the SELECT below, in column order.
+// The current row, in COLUMNS order, with the readable forms derived.
 func _row(rows: sqlite.Rows): Sms:
+    date := sqlite.Int64(rows, 4)
+    offset := sqlite.Int(rows, 7)
+    received := sqlite.Int64(rows, 6)
     ret Sms {
         id = sqlite.Int64(rows, 0),
         device = sqlite.Text(rows, 1),
         address = sqlite.Text(rows, 2),
         body = sqlite.Text(rows, 3),
-        date = sqlite.Int64(rows, 4),
+        date = date,
+        date_utc = clock.UTC(date),
+        date_local = clock.Local(date, offset),
         type = sqlite.Int(rows, 5),
-        received_at = sqlite.Int64(rows, 6)
+        tz_offset_minutes = offset,
+        tz_name = sqlite.Text(rows, 8),
+        received_at = received,
+        received_at_utc = clock.UTC(received)
     }
 end
 
+// Newest first, so a restoring phone sees recent messages before old ones.
+func _select(since: i64, limit: int, offset: int): Vector<Sms>:
+    mut out := Vector {} as Vector<Sms>
+    rows := sqlite.Prepare(_db, "SELECT " + COLUMNS + MATCHING + " ORDER BY date DESC, id DESC LIMIT ? OFFSET ?")
+    sqlite.BindInt(rows, 1, since)
+    sqlite.BindInt(rows, 2, limit as i64)
+    sqlite.BindInt(rows, 3, offset as i64)
+    until sqlite.Next(rows):
+        out.push(_row(rows))
+    end
+    sqlite.Finish(rows)
+    ret out
+end
+
+func _count(since: i64): i64:
+    rows := sqlite.Prepare(_db, "SELECT COUNT(*)" + MATCHING)
+    sqlite.BindInt(rows, 1, since)
+    mut n := 0 as i64
+    if sqlite.Next(rows): n = sqlite.Int64(rows, 0) end
+    sqlite.Finish(rows)
+    ret n
+end
+
 // ---------------------------------------------------------------- lifecycle
+
+func _table_exists(): bool:
+    ret sqlite.QueryInt(_db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'") > 0
+end
+
+func _version(): int:
+    ret sqlite.QueryInt(_db, "PRAGMA user_version")
+end
+
+// Generation 0 -> 1: put both instants in the same unit and make room for
+// where the phone was.
+//
+// Generation 0 wrote `received_at` in epoch SECONDS (a strftime('%s') default)
+// while `date` was already in milliseconds - two units in one row, which is
+// exactly the kind of thing that reads fine until someone subtracts them.
+// Both are milliseconds from here on, so the old seconds are scaled up. Any
+// `date` that was stored in seconds - by a client that sent the wrong unit
+// before clock.NormalizeMs existed - is scaled the same way; that one is
+// UPDATE OR IGNORE because the fix can collide with a correctly-stored copy
+// of the same message under the de-duplication index, and the right outcome
+// when it does is to leave the good row alone.
+//
+// The threshold in both statements is 2000-01-01 in milliseconds: below it a
+// value cannot be a plausible instant in milliseconds, so it is one in
+// seconds. Same reasoning, and same number, as clock.NormalizeMs.
+func _upgrade_to_1():
+    sqlite.Exec(_db, "ALTER TABLE messages ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
+    sqlite.Exec(_db, "ALTER TABLE messages ADD COLUMN tz_name TEXT NOT NULL DEFAULT ''")
+    sqlite.Exec(_db, "UPDATE messages SET received_at = received_at * 1000 WHERE received_at > 0 AND received_at < 946684800000")
+    sqlite.Exec(_db, "UPDATE OR IGNORE messages SET date = date * 1000 WHERE date > 0 AND date < 946684800000")
+end
+
+// The schema, applied on every start. A fresh file is created at the current
+// generation and stamped with it; an existing one is walked forward through
+// the _upgrade_* steps it has not seen. Everything else is IF NOT EXISTS, so
+// this is both the first-run setup and the no-op an up-to-date file gets.
+// schema.sql mirrors the result, commented, for inspecting a database by hand.
+func _migrate():
+    // WAL lets a reader and a writer coexist; the busy timeout absorbs the
+    // brief contention two uploads can still create.
+    sqlite.Exec(_db, "PRAGMA journal_mode=WAL")
+    sqlite.Exec(_db, "PRAGMA busy_timeout=5000")
+    fresh := !_table_exists()
+    sqlite.Exec(_db, CREATE_MESSAGES)
+    if fresh:
+        sqlite.Exec(_db, "PRAGMA user_version=1")
+    end
+    if _version() < 1:
+        _upgrade_to_1()
+        sqlite.Exec(_db, "PRAGMA user_version=1")
+    end
+    // The de-dup key: two uploads of the same SMS are the same row. It is
+    // built on the normalised UTC millisecond `date`, never on anything the
+    // phone's timezone touches, so the same message uploaded from two
+    // different countries still collapses onto one row.
+    sqlite.Exec(_db, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
+    // The restore path reads by date.
+    sqlite.Exec(_db, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
+end
 
 // Open the database file and create the schema if it is missing. Returns
 // false (without marking the store ready) when SQLite is unavailable or the
@@ -72,87 +211,66 @@ pub func Init(path: str): bool:
     _db = sqlite.Open(path)
     if !sqlite.Ok(_db): ret false end
     _lock = sync.NewMutex()
-    // WAL lets a reader and a writer coexist; the busy timeout absorbs the
-    // brief contention two uploads can still create.
-    sqlite.Exec(_db, "PRAGMA journal_mode=WAL")
-    sqlite.Exec(_db, "PRAGMA busy_timeout=5000")
-    sqlite.Exec(_db, "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', date INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 1, received_at INTEGER NOT NULL DEFAULT (strftime('%s','now')))")
-    sqlite.Exec(_db, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
-    sqlite.Exec(_db, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
+    _migrate()
     _ready = true
     ret true
-end
-
-pub func Ready(): bool:
-    ret _ready
 end
 
 pub func Close():
     if _ready: sqlite.Close(_db) end
 end
 
-// ---------------------------------------------------------------- writes
+// ---------------------------------------------------------------- queries
 
 // Insert one message, ignoring it if an identical one is already stored.
-// Returns true only when a NEW row was created (so the caller knows whether
-// to raise a Telegram alert), and writes the new row id into out_id.
-pub func SaveSms(device: str, address: str, body: str, date: i64, kind: int, out_id &: i64): bool:
-    out_id = 0 as i64
+// Returns true only when a NEW row was created, which is how the caller
+// knows whether to raise an alert.
+//
+// `m.date` is expected to have been through clock.NormalizeMs already -
+// ingest.salam is the only caller and does exactly that - so what lands in
+// the column is UTC epoch milliseconds whatever unit or clock it came from.
+// `received_at` is stamped here from the server's clock, the one clock in
+// the system that is the same for every phone; `id` is the database's.
+pub func Save(m: Sms): bool:
     sync.Lock(_lock)
-    ins := sqlite.Prepare(_db, "INSERT OR IGNORE INTO messages(device, address, body, date, type) VALUES (?, ?, ?, ?, ?)")
-    sqlite.BindText(ins, 1, device)
-    sqlite.BindText(ins, 2, address)
-    sqlite.BindText(ins, 3, body)
-    sqlite.BindInt(ins, 4, date)
-    sqlite.BindInt(ins, 5, kind as i64)
+    defer sync.Unlock(_lock)
+    ins := sqlite.Prepare(_db, "INSERT OR IGNORE INTO messages(device, address, body, date, type, received_at, tz_offset, tz_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlite.BindText(ins, 1, m.device)
+    sqlite.BindText(ins, 2, m.address)
+    sqlite.BindText(ins, 3, m.body)
+    sqlite.BindInt(ins, 4, m.date)
+    sqlite.BindInt(ins, 5, m.type as i64)
+    sqlite.BindInt(ins, 6, clock.NowMs())
+    sqlite.BindInt(ins, 7, m.tz_offset_minutes as i64)
+    sqlite.BindText(ins, 8, m.tz_name)
     sqlite.Next(ins)
     sqlite.Finish(ins)
-    changed := sqlite.Changes(_db)
-    mut created := false
-    if changed > 0:
-        created = true
-        out_id = sqlite.LastInsertId(_db)
-    end
-    sync.Unlock(_lock)
-    ret created
+    ret sqlite.Changes(_db) > 0
 end
 
-// ---------------------------------------------------------------- reads
-
-// A page of stored messages, newest first, restricted to messages whose
-// device timestamp is at or after `since` (0 = everything). This is the
-// restore path a new phone calls to pull its history back.
+// A page of messages whose UTC timestamp is at or after `since`
+// (0 = everything), with the total that matches it. This is the restore path
+// a new phone calls to pull its history back.
 //
-// The caller gets rows, not text: turning them into JSON is the HTTP layer's
-// job, and one json.Marshal there covers the whole response envelope.
-pub func ListSms(since: i64, limit: int, offset: int): Vector<Sms>:
-    mut out := Vector {} as Vector<Sms>
+// Rows and total are read under one lock, so an upload arriving mid-request
+// cannot make `count` disagree with `items`.
+pub func ListPage(since: i64, limit: int, offset: int): Page:
     sync.Lock(_lock)
-    rows := sqlite.Prepare(_db, "SELECT id, device, address, body, date, type, received_at FROM messages WHERE date >= ? ORDER BY date DESC, id DESC LIMIT ? OFFSET ?")
-    sqlite.BindInt(rows, 1, since)
-    sqlite.BindInt(rows, 2, limit as i64)
-    sqlite.BindInt(rows, 3, offset as i64)
-    until sqlite.Next(rows):
-        out.push(_row(rows))
-    end
-    sqlite.Finish(rows)
-    sync.Unlock(_lock)
-    ret out
+    defer sync.Unlock(_lock)
+    now := clock.NowMs()
+    ret Page {
+        items = _select(since, limit, offset),
+        count = _count(since),
+        since = since,
+        since_utc = clock.UTC(since),
+        server_time_ms = now,
+        server_time_utc = clock.UTC(now)
+    }
 end
 
-// Total messages, and messages at/after `since`. Kept in one round trip
-// through the lock so /api/stats is a single acquire.
-pub func CountSince(since: i64): i64:
+// Every message stored.
+pub func Total(): i64:
     sync.Lock(_lock)
-    rows := sqlite.Prepare(_db, "SELECT COUNT(*) FROM messages WHERE date >= ?")
-    sqlite.BindInt(rows, 1, since)
-    mut v := 0 as i64
-    if sqlite.Next(rows): v = sqlite.Int64(rows, 0) end
-    sqlite.Finish(rows)
-    sync.Unlock(_lock)
-    ret v
-end
-
-pub func CountAll(): i64:
-    ret CountSince(0 as i64)
+    defer sync.Unlock(_lock)
+    ret _count(0 as i64)
 end

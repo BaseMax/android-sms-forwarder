@@ -54,7 +54,7 @@
         </service>
 
         <!-- Fires on every incoming SMS; enqueues an expedited upload. Works
-             even when the app is not open — the system delivers the broadcast. -->
+             even when the app is not open - the system delivers the broadcast. -->
         <receiver
             android:name=".receiver.SmsReceiver"
             android:exported="true"

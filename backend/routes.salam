@@ -1,8 +1,8 @@
 /*
- * SMS Forwarder backend — the routes.
+ * SMS Forwarder backend - the routes.
  *
  *   POST /api/sms     ingest one or many messages (real-time push OR the
- *                     daily bulk sync — same endpoint, de-dup makes re-sends
+ *                     daily bulk sync - same endpoint, de-dup makes re-sends
  *                     harmless). On each genuinely new inbound message it
  *                     raises a Telegram alert.
  *   GET  /api/sms     read messages back (the restore path for a new phone):
@@ -11,8 +11,8 @@
  *   GET  /health      liveness, unauthenticated
  *
  * Every route except /health requires the shared secret in the X-API-Key
- * header. Each handler below is the same four steps — authenticate, read the
- * request, call one collaborator, send a struct — because the work itself
+ * header. Each handler below is the same four steps - authenticate, read the
+ * request, call one collaborator, send a struct - because the work itself
  * lives in api.salam, ingest.salam and store.salam. There is no SQL here, no
  * Telegram call, and no JSON text.
  */
@@ -31,6 +31,10 @@ const PAGE_MAX := 1000
 
 // The shapes the read paths answer with. Like store.Sms, each one IS its wire
 // format: json.Marshal derives the encoder from the fields.
+//
+// Page lives here rather than in store because the derive cannot encode a
+// Vector<store.Sms> nested in a struct declared in another module; declared
+// here, alongside the api.Send that marshals it, it works.
 pub struct Page:
     pub items: Vector<store.Sms> = Vector {} as Vector<store.Sms>
     // Total matching `since`, so a client can page through it.
@@ -55,9 +59,9 @@ func _create_sms(ctx: i64):
         api.Fail(ctx, 400, "empty request body")
         ret
     end
-    // A device label may be given once for the whole request instead of on
-    // every message in it.
     mut rep := ingest.Report {}
+    // X-Device-Id labels the whole request, for a phone that would otherwise
+    // repeat its name on every message in the body.
     if !ingest.Request(body, http.Ctx_header(ctx, "X-Device-Id"), rep):
         api.Fail(ctx, 400, "invalid JSON")
         ret
@@ -71,16 +75,18 @@ func _list_sms(ctx: i64):
     since := api.QueryI64(ctx, "since", 0 as i64)
     limit := api.QueryLimit(ctx, "limit", PAGE_DEFAULT, PAGE_MAX)
     offset := api.QueryCount(ctx, "offset")
-    api.Send(ctx, 200, Page { items = store.ListSms(since, limit, offset), count = store.CountSince(since) })
+    mut total := 0 as i64
+    items := store.List(since, limit, offset, total)
+    api.Send(ctx, 200, Page { items = items, count = total })
 end
 
 // GET /api/stats
 func _stats(ctx: i64):
     if !api.Authorized(ctx): ret end
-    api.Send(ctx, 200, Stats { total = store.CountAll() })
+    api.Send(ctx, 200, Stats { total = store.Total() })
 end
 
-// GET /health — the one route that answers without a key.
+// GET /health - the one route that answers without a key.
 func _health(ctx: i64):
     api.Send(ctx, 200, Health { notifications = notify.Enabled() })
 end

@@ -1,5 +1,5 @@
 /*
- * SMS Forwarder backend — startup.
+ * SMS Forwarder backend - startup.
  *
  * A tiny JSON API a phone talks to: it receives SMS, stores them in SQLite,
  * and pings the owner on Telegram when a new one arrives. See routes.salam

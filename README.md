@@ -1,11 +1,11 @@
 # Android SMS Forwarder
 
-Back up every SMS on an Android phone to a server you control — the moment a
-message arrives, and once a day as a full sweep — so you never lose your texts
+Back up every SMS on an Android phone to a server you control - the moment a
+message arrives, and once a day as a full sweep - so you never lose your texts
 when you switch phones. Each new incoming SMS can also ping you on Telegram.
 
 > Built for a simple need: *"I need an app that scans all SMS and uploads to an
-> API server every day, and whenever a new SMS is received — I keep losing SMS
+> API server every day, and whenever a new SMS is received - I keep losing SMS
 > when I switch phones."*
 
 ## Two parts
@@ -16,15 +16,13 @@ when you switch phones. Each new incoming SMS can also ping you on Telegram.
 | [`backend/`](backend/)   | [Salam](https://github.com/SalamLang/Salam) | A small JSON API over **SQLite** that stores messages and sends Telegram alerts. |
 
 ```
- ┌──────────────┐   POST /api/sms (batch, on arrival + daily)   ┌─────────────────┐
- │  Android app │ ────────────────────────────────────────────▶ │  Salam backend  │
- │  (Kotlin)    │   GET  /api/sms  (restore onto a new phone)    │  SQLite storage │
- └──────────────┘ ◀──────────────────────────────────────────── └────────┬────────┘
-                                                                          │ new inbox SMS
-                                                                          ▼
-                                                                    ┌───────────┐
-                                                                    │ Telegram  │  ← "message myself as a bot"
-                                                                    └───────────┘
+  Android app (Kotlin)                                  Salam backend
+  reads SMS, uploads on          --  POST /api/sms  -->  stores in SQLite,
+  arrival and daily              <-- GET  /api/sms  ---  sends Telegram alert
+                                     (restore new phone)          |
+                                                                  v
+                                                              Telegram
+                                                      ("message myself as a bot")
 ```
 
 ## The JSON contract
@@ -82,7 +80,7 @@ after that.
 - **The bot token lives on the server, never the phone**, so a lost phone leaks
   no Telegram credentials.
 - **All SQL is in one file** (`backend/store.salam`) and reaches the database
-  only as bound parameters — no query is built by string concatenation.
+  only as bound parameters - no query is built by string concatenation.
 - **The phone keeps a high-water mark** (the newest timestamp uploaded) and only
   sends what is newer, so the daily sweep is cheap after the first full scan.
 - **Backups keep running with the app closed:** a manifest SMS receiver catches

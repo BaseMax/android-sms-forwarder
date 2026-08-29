@@ -1,5 +1,5 @@
 /*
- * SMS Forwarder backend — Telegram notifier.
+ * SMS Forwarder backend - Telegram notifier.
  *
  * When a genuinely new inbound SMS is stored, the service pushes a short
  * message to the owner's own Telegram chat, via a bot. The bot token and the

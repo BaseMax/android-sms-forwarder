@@ -1,5 +1,5 @@
 /*
- * SMS Forwarder backend — configuration.
+ * SMS Forwarder backend - configuration.
  *
  * Every setting the service has, read from the environment once at startup.
  * No other file calls os.Env, so what the service can be configured with is
@@ -17,10 +17,13 @@ package config
 import os
 import parse "parse.salam"
 
+const DEFAULT_DB := "sms.db"
+const DEFAULT_PORT := 8080
+
 pub struct Config:
     pub api_key: str = ""
-    pub db_path: str = "sms.db"
-    pub port: int = 8080
+    pub db_path: str = DEFAULT_DB
+    pub port: int = DEFAULT_PORT
     pub bot_token: str = ""
     pub chat_id: i64 = 0
 end
@@ -32,14 +35,20 @@ func _text(name: str, fallback: str): str:
     ret v
 end
 
+// The same, as a number. Parsed at full width like every other number the
+// service reads: a Telegram supergroup chat id does not fit in 32 bits.
+func _num(name: str, fallback: i64): i64:
+    v := os.Env(name)
+    if v.len() == 0: ret fallback end
+    ret parse.I64(v)
+end
+
 pub func FromEnv(): Config:
     ret Config {
         api_key = os.Env("API_KEY"),
-        db_path = _text("DB_PATH", "sms.db"),
-        port = parse.I64(_text("PORT", "8080")) as int,
+        db_path = _text("DB_PATH", DEFAULT_DB),
+        port = _num("PORT", DEFAULT_PORT as i64) as int,
         bot_token = os.Env("BOT_TOKEN"),
-        // A supergroup chat id does not fit in 32 bits, so it is parsed at
-        // full width like every other number the service reads.
-        chat_id = parse.I64(os.Env("TELEGRAM_CHAT_ID"))
+        chat_id = _num("TELEGRAM_CHAT_ID", 0 as i64)
     }
 end

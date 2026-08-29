@@ -1,5 +1,5 @@
 /*
- * SMS Forwarder backend — reading numbers and fields out of untyped input.
+ * SMS Forwarder backend - reading numbers and fields out of untyped input.
  *
  * Nothing here knows about SMS, HTTP or SQL. It is the one place that turns
  * text and dynamic JSON values into the types the rest of the service uses,
@@ -14,9 +14,9 @@ import encoding.value
 
 // A base-10 signed integer at full 64-bit width.
 //
-// str.to_int() parses to i32, so every number that arrives as text — an
+// str.to_int() parses to i32, so every number that arrives as text - an
 // epoch-millisecond timestamp, a `since` query parameter, a Telegram chat id
-// — has to come through here or silently lose its top 32 bits. Anything that
+// - has to come through here or silently lose its top 32 bits. Anything that
 // is not a digit ends the number, and an empty or unparsable string is 0.
 pub func I64(s: str): i64:
     n := s.len()

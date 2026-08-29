@@ -1,5 +1,5 @@
 /*
- * SMS Forwarder backend — the HTTP conventions every route shares.
+ * SMS Forwarder backend - the HTTP conventions every route shares.
  *
  * How a reply is written, how a caller is authenticated, how a query
  * parameter is read. The handlers in routes.salam do none of this themselves,

@@ -11,6 +11,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import com.basemax.smsforwarder.data.model.MessageCodec
 import com.basemax.smsforwarder.data.model.SmsMessageDto
 import java.util.concurrent.TimeUnit
 
@@ -46,7 +47,7 @@ object SyncScheduler {
     fun uploadIncoming(context: Context, messages: List<SmsMessageDto>) {
         if (messages.isEmpty()) return
         val data = Data.Builder()
-            .putString(SyncWorker.KEY_MESSAGES, SyncWorker.encodeMessages(messages))
+            .putString(SyncWorker.KEY_MESSAGES, MessageCodec.encode(messages))
             .build()
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setInputData(data)

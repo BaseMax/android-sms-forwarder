@@ -3,7 +3,7 @@ package com.basemax.smsforwarder.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
+import com.basemax.smsforwarder.core.AppLog
 import com.basemax.smsforwarder.service.ServiceController
 import com.basemax.smsforwarder.work.SyncScheduler
 
@@ -19,7 +19,7 @@ class BootReceiver : BroadcastReceiver() {
                     ServiceController.start(app)
                     SyncScheduler.syncNow(app)
                 } catch (e: Exception) {
-                    Log.e("SmsForwarder", "Boot setup failed", e)
+                    AppLog.e("Boot setup failed", e)
                 }
             }
         }
