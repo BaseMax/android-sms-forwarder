@@ -11,10 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.rounded.Dns
-import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -29,6 +25,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.basemax.smsforwarder.ui.HomeUiState
+import com.basemax.smsforwarder.ui.icons.AppIcons
 import com.basemax.smsforwarder.ui.theme.WarnColor
 
 @Composable
@@ -39,21 +36,21 @@ fun StatusHero(
     val primary = MaterialTheme.colorScheme.primary
     val content: HeroContent = when {
         !state.hasPermission -> HeroContent(
-            icon = Icons.Rounded.WarningAmber,
+            icon = AppIcons.WarningAmber,
             tint = WarnColor,
             title = "Permission needed",
             subtitle = "Allow access to your SMS so they can be backed up.",
             action = "Grant SMS permission" to onRequestPermissions,
         )
         !state.isConfigured -> HeroContent(
-            icon = Icons.Rounded.Dns,
+            icon = AppIcons.Dns,
             tint = primary,
             title = "Add your server",
             subtitle = "Enter your server URL and API key below, then tap Save.",
             action = null,
         )
         else -> HeroContent(
-            icon = Icons.Rounded.CheckCircle,
+            icon = AppIcons.CheckCircle,
             tint = primary,
             title = if (state.serviceRunning) "Backups are active" else "Backups configured",
             subtitle = "${state.uploaded} messages backed up, new texts upload automatically.",

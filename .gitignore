@@ -5,3 +5,9 @@
 
 *.zip
 *.rar
+
+# Android build output and the local SDK path.
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties

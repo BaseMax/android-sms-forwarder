@@ -3,8 +3,14 @@ name: Android Debug Build
 on:
   push:
     branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-debug.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-debug.yml'
   workflow_dispatch:
 
 concurrency:
@@ -39,17 +45,22 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0'
+          log-accepted-android-sdk-licenses: false
 
-      # The Gradle wrapper is not committed, so install the Gradle version
-      # pinned in android/gradle/wrapper/gradle-wrapper.properties.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY }}
 
       - name: Assemble debug APK
-        run: gradle --no-daemon assembleDebug
+        env:
+          CONFIGURATION_CACHE: >-
+            ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY != '' && '--configuration-cache' || '' }}
+        run: gradle assembleDebug $CONFIGURATION_CACHE
 
       - name: Upload debug APK
         id: upload
@@ -60,9 +71,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # Put the build one click away from the PR itself, the way the backend
-      # workflow does with its executable. Skipped for forks, whose token
-      # cannot write comments.
       - name: Comment the download link on the PR
         if: >-
           github.event_name == 'pull_request' &&

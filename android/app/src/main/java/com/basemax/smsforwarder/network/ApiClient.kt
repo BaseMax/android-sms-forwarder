@@ -1,47 +1,58 @@
 package com.basemax.smsforwarder.network
 
+import com.basemax.smsforwarder.core.AppLog
 import com.basemax.smsforwarder.core.TimeUtils
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
-import java.util.concurrent.TimeUnit
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 
+/**
+ * The HTTP plumbing behind [SmsApi].
+ *
+ * Two JSON endpoints do not pay for Retrofit + Moshi + kotlin-reflect + OkHttp,
+ * which between them are several megabytes of the APK. HttpURLConnection and
+ * org.json are part of Android, so they cost nothing to ship - and on Android
+ * HttpURLConnection is itself backed by OkHttp inside the platform.
+ */
 object ApiClient {
 
-    val moshi: Moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
+    private const val TIMEOUT_MS = 30_000
 
-    fun create(baseUrl: String, apiKey: String): SmsApi {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+    fun create(baseUrl: String, apiKey: String): SmsApi = SmsApi(normalize(baseUrl), apiKey)
+
+    /**
+     * Runs one request and returns the response body. Blocking - [SmsApi] keeps
+     * it on the IO dispatcher.
+     */
+    internal fun request(url: String, method: String, apiKey: String, body: String?): String {
+        val started = TimeUtils.nowMs()
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = TIMEOUT_MS
+            readTimeout = TIMEOUT_MS
+            setRequestProperty("X-API-Key", apiKey)
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("X-Tz-Offset", TimeUtils.offsetMinutesAt(started).toString())
+            setRequestProperty("X-Tz-Name", TimeUtils.zoneName())
         }
-        val client = OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val now = TimeUtils.nowMs()
-                val request = chain.request().newBuilder()
-                    .addHeader("X-API-Key", apiKey)
-                    .addHeader("Content-Type", "application/json")
-                    .addHeader("X-Tz-Offset", TimeUtils.offsetMinutesAt(now).toString())
-                    .addHeader("X-Tz-Name", TimeUtils.zoneName())
-                    .build()
-                chain.proceed(request)
+        try {
+            AppLog.i("--> $method $url")
+            if (body != null) {
+                val bytes = body.toByteArray(Charsets.UTF_8)
+                connection.doOutput = true
+                connection.setFixedLengthStreamingMode(bytes.size)
+                connection.outputStream.use { it.write(bytes) }
             }
-            .addInterceptor(logging)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
-
-        return Retrofit.Builder()
-            .baseUrl(normalize(baseUrl))
-            .client(client)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
-            .build()
-            .create(SmsApi::class.java)
+            val code = connection.responseCode
+            val ok = code in 200..299
+            val stream = if (ok) connection.inputStream else connection.errorStream
+            val text = stream?.use { it.reader(Charsets.UTF_8).readText() }.orEmpty()
+            AppLog.i("<-- $code $method $url (${TimeUtils.nowMs() - started}ms)")
+            if (!ok) throw IOException("HTTP $code from $url: ${text.take(200)}")
+            return text
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun normalize(url: String): String =

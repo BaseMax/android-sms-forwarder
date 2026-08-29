@@ -1,30 +1,27 @@
 package com.basemax.smsforwarder.ui.home
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.BatteryChargingFull
-import androidx.compose.material.icons.rounded.Shield
-import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import com.basemax.smsforwarder.ui.HomeUiState
 import com.basemax.smsforwarder.ui.components.SectionCard
 import com.basemax.smsforwarder.ui.components.StatusRow
+import com.basemax.smsforwarder.ui.icons.AppIcons
 
 @Composable
 fun ProtectionSection(
     state: HomeUiState,
     onFixBattery: () -> Unit,
 ) {
-    SectionCard(title = "Always-on protection", icon = Icons.Rounded.Shield) {
+    SectionCard(title = "Always-on protection", icon = AppIcons.Shield) {
         StatusRow(
-            icon = Icons.Rounded.Sms,
+            icon = AppIcons.Sms,
             label = "Background service",
             value = if (state.serviceRunning) "Running" else "Starting",
             ok = state.serviceRunning,
         )
         StatusRow(
-            icon = Icons.Rounded.BatteryChargingFull,
+            icon = AppIcons.BatteryChargingFull,
             label = "Battery exemption",
             value = if (state.ignoringBattery) "Granted" else "Recommended",
             ok = state.ignoringBattery,

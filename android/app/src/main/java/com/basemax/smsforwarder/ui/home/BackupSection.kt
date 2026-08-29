@@ -4,10 +4,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CloudUpload
-import androidx.compose.material.icons.rounded.Schedule
-import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -18,6 +14,7 @@ import com.basemax.smsforwarder.core.TimeUtils
 import com.basemax.smsforwarder.ui.HomeUiState
 import com.basemax.smsforwarder.ui.components.SectionCard
 import com.basemax.smsforwarder.ui.components.StatusRow
+import com.basemax.smsforwarder.ui.icons.AppIcons
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -26,15 +23,15 @@ fun BackupSection(
     state: HomeUiState,
     onSyncNow: () -> Unit,
 ) {
-    SectionCard(title = "Backup", icon = Icons.Rounded.CloudUpload) {
+    SectionCard(title = "Backup", icon = AppIcons.CloudUpload) {
         StatusRow(
-            icon = Icons.Rounded.CloudUpload,
+            icon = AppIcons.CloudUpload,
             label = "Messages uploaded",
             value = state.uploaded.toString(),
             ok = state.uploaded > 0,
         )
         StatusRow(
-            icon = Icons.Rounded.Sync,
+            icon = AppIcons.Sync,
             label = "Last sync",
             value = if (state.lastSyncMs <= 0L) "Never"
             else TimeUtils.formatForPeople(state.lastSyncMs),
@@ -42,7 +39,7 @@ fun BackupSection(
         )
         if (state.clockIsOff) {
             StatusRow(
-                icon = Icons.Rounded.Schedule,
+                icon = AppIcons.Schedule,
                 label = "Phone clock",
                 value = describeSkew(state.clockSkewMs),
                 ok = false,
@@ -53,7 +50,7 @@ fun BackupSection(
             enabled = state.hasPermission,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Icon(Icons.Rounded.Sync, null, modifier = Modifier.size(18.dp))
+            Icon(AppIcons.Sync, null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text("Sync all messages now")
         }
