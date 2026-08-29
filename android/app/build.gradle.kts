@@ -14,15 +14,11 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        // The UI is English-only. Without this every AndroidX library drags in
-        // its full set of translations, none of which this app can show.
         resourceConfigurations += "en"
     }
 
     buildTypes {
-        // R8 runs on debug as well. The debug APK is what CI hands people, so
-        // it has no business being several times the size of a release build.
-        // isDebuggable stays on, so it is still debuggable and debug-signed.
+
         debug {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -48,13 +44,10 @@ android {
     kotlinOptions {
         jvmTarget = "17"
         freeCompilerArgs += listOf(
-            // Live literals wrap every constant in a lookup class so the IDE can
-            // swap them without recompiling. Nothing here needs that, and it is
-            // a per-file class plus a field per literal in the APK.
+
             "-P",
             "plugin:androidx.compose.compiler.plugins.kotlin:liveLiteralsEnabled=false",
-            // Source markers exist for the Compose Layout Inspector, which needs
-            // the ui-tooling runtime we no longer ship.
+
             "-P",
             "plugin:androidx.compose.compiler.plugins.kotlin:sourceInformation=false",
         )
@@ -63,7 +56,7 @@ android {
         compose = true
     }
     composeOptions {
-        // Compatible with Kotlin 1.9.24.
+
         kotlinCompilerExtensionVersion = "1.5.14"
     }
     packaging {
@@ -73,12 +66,12 @@ android {
             "/META-INF/*.kotlin_module",
             "/META-INF/com/android/build/gradle/*",
             "/DebugProbesKt.bin",
-            // Kotlin builtin metadata, only read by kotlin-reflect.
+
             "/kotlin/**",
             "**/*.proto",
         )
     }
-    // The dependency blob signed into the APK is only for Play Console.
+
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
@@ -96,16 +89,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
-    // No material-icons-extended: it ships every Material icon there is. The
-    // twelve this app draws live in ui/icons/AppIcons.kt.
-    // No ui-tooling / ui-tooling-preview either - there are no @Preview
-    // functions. Add both back (debugImplementation) if you want previews.
 
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-
-    // HTTP is HttpURLConnection + org.json, both part of Android. See ApiClient.
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 

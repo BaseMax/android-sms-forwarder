@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Do not back up settings; the API key is a secret. -->
+
     <exclude domain="sharedpref" path="." />
     <exclude domain="file" path="datastore/" />
 </full-backup-content>

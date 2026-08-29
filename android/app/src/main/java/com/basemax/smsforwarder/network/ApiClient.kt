@@ -6,24 +6,12 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * The HTTP plumbing behind [SmsApi].
- *
- * Two JSON endpoints do not pay for Retrofit + Moshi + kotlin-reflect + OkHttp,
- * which between them are several megabytes of the APK. HttpURLConnection and
- * org.json are part of Android, so they cost nothing to ship - and on Android
- * HttpURLConnection is itself backed by OkHttp inside the platform.
- */
 object ApiClient {
 
     private const val TIMEOUT_MS = 30_000
 
     fun create(baseUrl: String, apiKey: String): SmsApi = SmsApi(normalize(baseUrl), apiKey)
 
-    /**
-     * Runs one request and returns the response body. Blocking - [SmsApi] keeps
-     * it on the IO dispatcher.
-     */
     internal fun request(url: String, method: String, apiKey: String, body: String?): String {
         val started = TimeUtils.nowMs()
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {

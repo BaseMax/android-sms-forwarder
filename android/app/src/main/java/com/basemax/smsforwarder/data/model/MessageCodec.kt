@@ -4,11 +4,6 @@ import com.basemax.smsforwarder.core.AppLog
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * The wire format, written by hand against `org.json`. Reflection-based
- * mapping (Moshi + kotlin-reflect) would cost megabytes to save these few
- * lines; the payload has seven fields.
- */
 object MessageCodec {
 
     fun encode(messages: List<SmsMessageDto>): String {

@@ -1,6 +1,5 @@
 package com.basemax.smsforwarder.data.model
 
-/** One SMS as the API takes it. [MessageCodec] maps these to and from JSON. */
 data class SmsMessageDto(
     val address: String,
     val body: String,
@@ -11,7 +10,6 @@ data class SmsMessageDto(
     val tzName: String = "",
 )
 
-/** What the server reports back after an upload. */
 data class IngestResponse(
     val received: Int,
     val stored: Int,

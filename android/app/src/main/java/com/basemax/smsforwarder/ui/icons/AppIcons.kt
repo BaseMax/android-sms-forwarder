@@ -6,15 +6,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.unit.dp
 
-/**
- * The twelve Material Symbols (rounded) this app actually draws.
- *
- * `androidx.compose.material:material-icons-extended` carries every icon
- * Google has ever published - thousands of classes that all land in the APK,
- * because a debug build is not shrunk. These are the same glyphs: the path
- * data below is copied verbatim from the rounded 24dp sources, on the same
- * 24x24 viewport, so they render identically for a few hundred bytes.
- */
 object AppIcons {
 
     val BatteryChargingFull by icon(
@@ -98,10 +89,6 @@ object AppIcons {
     )
 }
 
-/**
- * Builds the vector on first use and caches it, the way the generated Material
- * icons do. Filled black; `Icon` recolours it with the tint it is given.
- */
 private fun icon(pathData: String): Lazy<ImageVector> = lazy {
     ImageVector.Builder(
         defaultWidth = 24.dp,

@@ -7,7 +7,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/** The two endpoints the backend exposes. Build one with [ApiClient.create]. */
 class SmsApi internal constructor(
     private val baseUrl: String,
     private val apiKey: String,

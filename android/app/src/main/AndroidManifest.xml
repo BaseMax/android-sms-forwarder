@@ -1,21 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Read the SMS store (for the initial scan and the daily sweep). -->
     <uses-permission android:name="android.permission.READ_SMS" />
-    <!-- Be woken the moment a new SMS arrives. -->
+
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
-    <!-- Upload to the API. -->
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- Start the keep-alive service at boot / after an update. -->
+
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <!-- Post the persistent service notification (Android 13+). -->
+
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Run an always-on foreground service that watches for SMS. -->
+
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <!-- Ask to be exempt from battery optimisation so the OS keeps us alive. -->
+
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
@@ -39,9 +38,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Always-on service. Keeps the app present so OEM battery managers are
-             less likely to kill it, and re-triggers a sync on a slow heartbeat.
-             stopWithTask=false so swiping the app away does not stop it. -->
         <service
             android:name=".service.SmsForwarderService"
             android:exported="false"
@@ -52,8 +48,6 @@
                 android:value="Continuously watches for incoming SMS and backs them up to the user's own server so messages are not lost when switching phones." />
         </service>
 
-        <!-- Fires on every incoming SMS; enqueues an expedited upload. Works
-             even when the app is not open - the system delivers the broadcast. -->
         <receiver
             android:name=".receiver.SmsReceiver"
             android:exported="true"
@@ -63,7 +57,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Starts the service and re-arms the daily sync after boot / update. -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:exported="true">
