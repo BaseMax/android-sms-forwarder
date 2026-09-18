@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       salam_version:
-        description: 'Salam compiler release to build with (e.g. 0.3.5)'
+        description: 'Salam compiler release to build with (e.g. 0.3.8)'
         required: false
         default: ''
 
@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 env:
-  SALAM_VERSION: ${{ inputs.salam_version || '0.3.5' }}
+  SALAM_VERSION: ${{ inputs.salam_version || '0.3.8' }}
   BINARY: sms-backend
   TARGET: linux-x86_64
 
