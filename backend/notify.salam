@@ -3,47 +3,99 @@ package notify
 import telegram.bot
 import clock "clock.salam"
 import store "store.salam"
-import sync
-import chan
+import str
 import time
 
-const QUEUE_CAPACITY := 65536 as i64
+const BATCH_LIMIT := 50
 const THROTTLE_MS := 1100
-const BACKOFF_MS := 5000
+const IDLE_POLL_MS := 1000
+const RETRY_WAIT_MS := 5000
+const MAX_BODY := 3500
+
+const SENT := 0
+const RETRY := 1
+const DROP := 2
 
 mut client := bot.Bot {}
-mut chatId := 0 as i64
+mut chatIdText := ""
 mut active := false
-mut queue := chan.Chan {} as chan.Chan<str>
 
-func typeLabel(kind: int): str:
-    if kind == 2: ret "sent" end
-    ret "received"
+func headerLine(kind: int): str:
+    if kind == 2: ret "📤 SMS sent" end
+    ret "📩 New SMS received"
+end
+
+func partyLine(kind: int, who: str): str:
+    mut name := who
+    if name.len() == 0: name = "(unknown)" end
+    if kind == 2: ret "👤 To: " + name end
+    ret "👤 From: " + name
+end
+
+func prettyTime(iso: str): str:
+    if iso.len() < 19: ret iso end
+    ret iso.substr(0, 10) + " " + iso.substr(11, 8)
+end
+
+func clip(body: str): str:
+    if body.len() > MAX_BODY: ret body.substr(0, MAX_BODY) + " ..." end
+    ret body
 end
 
 func format(m: store.Sms): str:
-    mut from := m.address
-    if from.len() == 0: from = "(unknown)" end
-    mut text := "SMS " + typeLabel(m.type) + "\nNumber: " + from
-    text = text + "\nWhen: " + clock.UTC(m.date) + " (UTC)"
+    mut text := headerLine(m.type)
+    text = text + "\n\n" + partyLine(m.type, m.address)
+    text = text + "\n🕒 " + prettyTime(clock.UTC(m.date)) + " UTC"
     if m.tz_offset_minutes != 0 || m.tz_name.len() > 0:
         mut zone := ""
-        if m.tz_name.len() > 0: zone = " " + m.tz_name end
-        text = text + "\nLocal: " + clock.Local(m.date, m.tz_offset_minutes) + zone
+        if m.tz_name.len() > 0: zone = " (" + m.tz_name + ")" end
+        text = text + "\n🌍 " + prettyTime(clock.Local(m.date, m.tz_offset_minutes)) + zone
     end
-    ret text + "\n\n" + m.body
+    ret text + "\n\n💬 " + clip(m.body)
 end
 
-func drain():
-    mut ok := true
+func send(text: str): bot.ApiResponse:
+    mut params := HashMap {} as HashMap<str, str>
+    params.put("chat_id", chatIdText)
+    params.put("text", text)
+    ret bot.Call(client, "sendMessage", params)
+end
+
+func classify(resp: bot.ApiResponse): int:
+    if bot.Ok(resp): ret SENT end
+    code := resp.error_code
+    if code == 0 as i64 || code == 429 as i64 || code >= 500 as i64: ret RETRY end
+    ret DROP
+end
+
+func worker():
     until true:
-        text := queue.recv(ok)
-        if !ok: break end
-        resp := bot.SendMessage(client, chatId, text)
-        if !bot.Ok(resp):
-            time.Sleep(BACKOFF_MS)
+        batch := store.Pending(BATCH_LIMIT)
+        if batch.len() == 0:
+            batch.free()
+            time.Sleep(IDLE_POLL_MS)
+        else:
+            mut paused := false
+            each m in batch:
+                if !paused:
+                    outcome := classify(send(format(m)))
+                    if outcome == SENT:
+                        store.MarkNotified(m.id)
+                        time.Sleep(THROTTLE_MS)
+                    else:
+                        if outcome == DROP:
+                            println "[notify] giving up on message ", m.id
+                            store.MarkFailed(m.id)
+                            time.Sleep(THROTTLE_MS)
+                        else:
+                            paused = true
+                        end
+                    end
+                end
+            end
+            batch.free()
+            if paused: time.Sleep(RETRY_WAIT_MS) end
         end
-        time.Sleep(THROTTLE_MS)
     end
 end
 
@@ -53,18 +105,12 @@ pub func Init(token: str, chat_id: i64): bool:
         ret false
     end
     client = bot.NewBot(token)
-    chatId = chat_id
-    queue.init(QUEUE_CAPACITY)
+    chatIdText = str.FromInt(chat_id)
     active = true
-    spawn(drain)
+    spawn(worker)
     ret true
 end
 
 pub func Enabled(): bool:
     ret active
-end
-
-pub func Enqueue(m: store.Sms):
-    if !active: ret end
-    queue.send(format(m))
 end

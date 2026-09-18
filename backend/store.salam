@@ -4,9 +4,9 @@ import db.sqlite
 import sync
 import clock "clock.salam"
 
-const SCHEMA_VERSION := 1
+const SCHEMA_VERSION := 2
 
-const CREATE_MESSAGES := "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', date INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 1, received_at INTEGER NOT NULL DEFAULT 0, tz_offset INTEGER NOT NULL DEFAULT 0, tz_name TEXT NOT NULL DEFAULT '')"
+const CREATE_MESSAGES := "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, device TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', date INTEGER NOT NULL DEFAULT 0, type INTEGER NOT NULL DEFAULT 1, received_at INTEGER NOT NULL DEFAULT 0, tz_offset INTEGER NOT NULL DEFAULT 0, tz_name TEXT NOT NULL DEFAULT '', notified INTEGER NOT NULL DEFAULT 0)"
 
 const COLUMNS := "id, device, address, body, date, type, received_at, tz_offset, tz_name"
 
@@ -64,6 +64,17 @@ func selectPage(since: i64, limit: int, offset: int): Vector<Sms>:
     ret out
 end
 
+func selectPending(limit: int): Vector<Sms>:
+    mut out := Vector {} as Vector<Sms>
+    rows := sqlite.Prepare(database, "SELECT " + COLUMNS + " FROM messages WHERE notified = 0 ORDER BY id ASC LIMIT ?")
+    sqlite.BindInt(rows, 1, limit as i64)
+    until sqlite.Next(rows):
+        out.push(readRow(rows))
+    end
+    sqlite.Finish(rows)
+    ret out
+end
+
 func countSince(since: i64): i64:
     rows := sqlite.Prepare(database, "SELECT COUNT(*)" + MATCHING)
     sqlite.BindInt(rows, 1, since)
@@ -71,6 +82,14 @@ func countSince(since: i64): i64:
     if sqlite.Next(rows): n = sqlite.Int64(rows, 0) end
     sqlite.Finish(rows)
     ret n
+end
+
+func setNotified(id: i64, state: int):
+    up := sqlite.Prepare(database, "UPDATE messages SET notified = ? WHERE id = ?")
+    sqlite.BindInt(up, 1, state as i64)
+    sqlite.BindInt(up, 2, id)
+    sqlite.Next(up)
+    sqlite.Finish(up)
 end
 
 func tableExists(): bool:
@@ -88,20 +107,23 @@ func upgradeToV1():
     sqlite.Exec(database, "UPDATE OR IGNORE messages SET date = date * 1000 WHERE date > 0 AND date < 946684800000")
 end
 
+func upgradeToV2():
+    sqlite.Exec(database, "ALTER TABLE messages ADD COLUMN notified INTEGER NOT NULL DEFAULT 0")
+end
+
 func migrate():
     sqlite.Exec(database, "PRAGMA journal_mode=WAL")
     sqlite.Exec(database, "PRAGMA busy_timeout=5000")
     fresh := !tableExists()
     sqlite.Exec(database, CREATE_MESSAGES)
-    if fresh:
-        sqlite.Exec(database, "PRAGMA user_version=1")
+    if !fresh:
+        if userVersion() < 1: upgradeToV1() end
+        if userVersion() < 2: upgradeToV2() end
     end
-    if userVersion() < SCHEMA_VERSION:
-        upgradeToV1()
-        sqlite.Exec(database, "PRAGMA user_version=1")
-    end
+    sqlite.Exec(database, "PRAGMA user_version=2")
     sqlite.Exec(database, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
     sqlite.Exec(database, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
+    sqlite.Exec(database, "CREATE INDEX IF NOT EXISTS ix_messages_notified ON messages(notified)")
 end
 
 pub func Init(path: str): bool:
@@ -147,4 +169,22 @@ pub func Total(): i64:
     sync.Lock(lock)
     defer sync.Unlock(lock)
     ret countSince(0 as i64)
+end
+
+pub func Pending(limit: int): Vector<Sms>:
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    ret selectPending(limit)
+end
+
+pub func MarkNotified(id: i64):
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    setNotified(id, 1)
+end
+
+pub func MarkFailed(id: i64):
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    setNotified(id, 2)
 end

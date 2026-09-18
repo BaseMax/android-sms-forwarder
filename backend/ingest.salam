@@ -6,7 +6,6 @@ import encoding.encerr
 import parse "parse.salam"
 import clock "clock.salam"
 import store "store.salam"
-import notify "notify.salam"
 
 pub struct Report:
     pub received: int = 0
@@ -65,11 +64,7 @@ func ingestItem(item: value.Value, def: Defaults, now_ms: i64): bool:
         tz_offset_minutes = offset,
         tz_name = zone
     }
-    created := store.Save(m)
-    if created:
-        notify.Enqueue(m)
-    end
-    ret created
+    ret store.Save(m)
 end
 
 func ingestArray(arr: value.Value, def: Defaults, now_ms: i64, rep &: Report):
