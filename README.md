@@ -49,9 +49,6 @@ Messages are de-duplicated on `(address, body, date, type)`, so the real-time
 push and the daily sweep can overlap freely. Every route except `GET /health`
 requires the shared secret in the `X-API-Key` header.
 
-Full API and per-component notes are in each half's README:
-[backend/README.md](backend/README.md) and [android/README.md](android/README.md).
-
 ## Quick start
 
 **Backend** (needs the `salam` compiler and `libsqlite3`):
@@ -94,13 +91,12 @@ after that.
   wall-clock time that phone displayed. Timestamps arriving in the wrong unit
   (seconds instead of milliseconds) or from a phone whose clock is plainly
   wrong are corrected at the door, and the app warns its owner when its clock
-  disagrees with the server's. See
-  [Time and timezones](backend/README.md#time-and-timezones).
+  disagrees with the server's.
 - **Backups keep running with the app closed:** a manifest SMS receiver catches
   new texts, a persistent foreground service keeps the app alive (auto-started
   on boot, surviving app-swipe and system-kill), and WorkManager handles the
   daily sweep and retries. An in-app prompt requests battery-optimisation
-  exemption to keep it punctual. See [android/README.md](android/README.md).
+  exemption to keep it punctual.
 
 ## License
 
