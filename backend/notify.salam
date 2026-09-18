@@ -2,19 +2,49 @@ package notify
 
 import telegram.bot
 import clock "clock.salam"
+import store "store.salam"
+import sync
+import chan
+import time
+
+const QUEUE_CAPACITY := 65536 as i64
+const THROTTLE_MS := 1100
+const BACKOFF_MS := 5000
 
 mut client := bot.Bot {}
 mut chatId := 0 as i64
 mut active := false
+mut queue := chan.Chan {} as chan.Chan<str>
 
-func formatWhen(date_ms: i64, tz_offset_minutes: int, tz_name: str): str:
-    mut s := "When: " + clock.UTC(date_ms) + " (UTC)"
-    if tz_offset_minutes != 0 || tz_name.len() > 0:
-        mut where := ""
-        if tz_name.len() > 0: where = " " + tz_name end
-        s = s + "\nPhone: " + clock.Local(date_ms, tz_offset_minutes) + where
+func typeLabel(kind: int): str:
+    if kind == 2: ret "sent" end
+    ret "received"
+end
+
+func format(m: store.Sms): str:
+    mut from := m.address
+    if from.len() == 0: from = "(unknown)" end
+    mut text := "SMS " + typeLabel(m.type) + "\nNumber: " + from
+    text = text + "\nWhen: " + clock.UTC(m.date) + " (UTC)"
+    if m.tz_offset_minutes != 0 || m.tz_name.len() > 0:
+        mut zone := ""
+        if m.tz_name.len() > 0: zone = " " + m.tz_name end
+        text = text + "\nLocal: " + clock.Local(m.date, m.tz_offset_minutes) + zone
     end
-    ret s
+    ret text + "\n\n" + m.body
+end
+
+func drain():
+    mut ok := true
+    until true:
+        text := queue.recv(ok)
+        if !ok: break end
+        resp := bot.SendMessage(client, chatId, text)
+        if !bot.Ok(resp):
+            time.Sleep(BACKOFF_MS)
+        end
+        time.Sleep(THROTTLE_MS)
+    end
 end
 
 pub func Init(token: str, chat_id: i64): bool:
@@ -24,7 +54,9 @@ pub func Init(token: str, chat_id: i64): bool:
     end
     client = bot.NewBot(token)
     chatId = chat_id
+    queue.init(QUEUE_CAPACITY)
     active = true
+    spawn(drain)
     ret true
 end
 
@@ -32,10 +64,7 @@ pub func Enabled(): bool:
     ret active
 end
 
-pub func SmsAlert(address: str, body: str, date_ms: i64, tz_offset_minutes: int, tz_name: str):
+pub func Enqueue(m: store.Sms):
     if !active: ret end
-    mut from := address
-    if from.len() == 0: from = "(unknown)" end
-    text := "New SMS received\n\nFrom: " + from + "\n" + formatWhen(date_ms, tz_offset_minutes, tz_name) + "\n\n" + body
-    bot.SendMessage(client, chatId, text)
+    queue.send(format(m))
 end
