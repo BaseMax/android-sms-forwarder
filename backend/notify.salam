@@ -2,7 +2,7 @@ package notify
 
 import telegram.bot
 import clock "clock.salam"
-import store "store.salam"
+import store "store/store.salam"
 import str
 import time
 

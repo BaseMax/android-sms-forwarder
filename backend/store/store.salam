@@ -1,0 +1,75 @@
+package store
+
+import db.sqlite
+import sync
+
+mut database := sqlite.Database {}
+mut lock := sync.Mutex {}
+mut ready := false
+
+pub struct Sms:
+    pub id: i64 = 0
+    pub device: str = ""
+    pub address: str = ""
+    pub body: str = ""
+    pub date: i64 = 0
+    pub date_utc: str = ""
+    pub date_local: str = ""
+    pub type: int = 1
+    pub tz_offset_minutes: int = 0
+    pub tz_name: str = ""
+    pub received_at: i64 = 0
+    pub received_at_utc: str = ""
+end
+
+pub func Init(path: str): bool:
+    if !sqlite.Available(): ret false end
+    database = sqlite.Open(path)
+    if !sqlite.Ok(database): ret false end
+    lock = sync.NewMutex()
+    runMigrations()
+    ready = true
+    ret true
+end
+
+pub func Close():
+    if ready: sqlite.Close(database) end
+end
+
+pub func Save(m: Sms): bool:
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    ret insertMessage(m)
+end
+
+pub func ListPage(since: i64, limit: int, offset: int, total &: i64): Vector<Sms>:
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    items := selectPage(since, limit, offset)
+    total = countSince(since)
+    ret items
+end
+
+pub func Total(): i64:
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    ret countSince(0 as i64)
+end
+
+pub func Pending(limit: int): Vector<Sms>:
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    ret selectPending(limit)
+end
+
+pub func MarkNotified(id: i64):
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    setNotified(id, 1)
+end
+
+pub func MarkFailed(id: i64):
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    setNotified(id, 2)
+end

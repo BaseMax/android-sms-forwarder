@@ -5,7 +5,7 @@ import encoding.value
 import encoding.encerr
 import parse "parse.salam"
 import clock "clock.salam"
-import store "store.salam"
+import store "store/store.salam"
 
 pub struct Report:
     pub received: int = 0

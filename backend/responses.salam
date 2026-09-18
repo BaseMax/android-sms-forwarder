@@ -1,6 +1,6 @@
 package responses
 
-import store "store.salam"
+import store "store/store.salam"
 
 pub struct Page:
     pub items: Vector<store.Sms> = Vector {} as Vector<store.Sms>

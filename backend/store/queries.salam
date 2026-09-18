@@ -1,8 +1,7 @@
 package store
 
 import db.sqlite
-import sync
-import clock "clock.salam"
+import clock "../clock.salam"
 
 const SCHEMA_VERSION := 2
 
@@ -11,25 +10,6 @@ const CREATE_MESSAGES := "CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMAR
 const COLUMNS := "id, device, address, body, date, type, received_at, tz_offset, tz_name"
 
 const MATCHING := " FROM messages WHERE date >= ?"
-
-mut database := sqlite.Database {}
-mut lock := sync.Mutex {}
-mut ready := false
-
-pub struct Sms:
-    pub id: i64 = 0
-    pub device: str = ""
-    pub address: str = ""
-    pub body: str = ""
-    pub date: i64 = 0
-    pub date_utc: str = ""
-    pub date_local: str = ""
-    pub type: int = 1
-    pub tz_offset_minutes: int = 0
-    pub tz_name: str = ""
-    pub received_at: i64 = 0
-    pub received_at_utc: str = ""
-end
 
 func readRow(rows: sqlite.Rows): Sms:
     date := sqlite.Int64(rows, 4)
@@ -49,6 +29,21 @@ func readRow(rows: sqlite.Rows): Sms:
         received_at = received,
         received_at_utc = clock.UTC(received)
     }
+end
+
+func insertMessage(m: Sms): bool:
+    ins := sqlite.Prepare(database, "INSERT OR IGNORE INTO messages(device, address, body, date, type, received_at, tz_offset, tz_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlite.BindText(ins, 1, m.device)
+    sqlite.BindText(ins, 2, m.address)
+    sqlite.BindText(ins, 3, m.body)
+    sqlite.BindInt(ins, 4, m.date)
+    sqlite.BindInt(ins, 5, m.type as i64)
+    sqlite.BindInt(ins, 6, clock.NowMs())
+    sqlite.BindInt(ins, 7, m.tz_offset_minutes as i64)
+    sqlite.BindText(ins, 8, m.tz_name)
+    sqlite.Next(ins)
+    sqlite.Finish(ins)
+    ret sqlite.Changes(database) > 0
 end
 
 func selectPage(since: i64, limit: int, offset: int): Vector<Sms>:
@@ -111,7 +106,7 @@ func upgradeToV2():
     sqlite.Exec(database, "ALTER TABLE messages ADD COLUMN notified INTEGER NOT NULL DEFAULT 0")
 end
 
-func migrate():
+func runMigrations():
     sqlite.Exec(database, "PRAGMA journal_mode=WAL")
     sqlite.Exec(database, "PRAGMA busy_timeout=5000")
     fresh := !tableExists()
@@ -124,67 +119,4 @@ func migrate():
     sqlite.Exec(database, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
     sqlite.Exec(database, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
     sqlite.Exec(database, "CREATE INDEX IF NOT EXISTS ix_messages_notified ON messages(notified)")
-end
-
-pub func Init(path: str): bool:
-    if !sqlite.Available(): ret false end
-    database = sqlite.Open(path)
-    if !sqlite.Ok(database): ret false end
-    lock = sync.NewMutex()
-    migrate()
-    ready = true
-    ret true
-end
-
-pub func Close():
-    if ready: sqlite.Close(database) end
-end
-
-pub func Save(m: Sms): bool:
-    sync.Lock(lock)
-    defer sync.Unlock(lock)
-    ins := sqlite.Prepare(database, "INSERT OR IGNORE INTO messages(device, address, body, date, type, received_at, tz_offset, tz_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    sqlite.BindText(ins, 1, m.device)
-    sqlite.BindText(ins, 2, m.address)
-    sqlite.BindText(ins, 3, m.body)
-    sqlite.BindInt(ins, 4, m.date)
-    sqlite.BindInt(ins, 5, m.type as i64)
-    sqlite.BindInt(ins, 6, clock.NowMs())
-    sqlite.BindInt(ins, 7, m.tz_offset_minutes as i64)
-    sqlite.BindText(ins, 8, m.tz_name)
-    sqlite.Next(ins)
-    sqlite.Finish(ins)
-    ret sqlite.Changes(database) > 0
-end
-
-pub func ListPage(since: i64, limit: int, offset: int, total &: i64): Vector<Sms>:
-    sync.Lock(lock)
-    defer sync.Unlock(lock)
-    items := selectPage(since, limit, offset)
-    total = countSince(since)
-    ret items
-end
-
-pub func Total(): i64:
-    sync.Lock(lock)
-    defer sync.Unlock(lock)
-    ret countSince(0 as i64)
-end
-
-pub func Pending(limit: int): Vector<Sms>:
-    sync.Lock(lock)
-    defer sync.Unlock(lock)
-    ret selectPending(limit)
-end
-
-pub func MarkNotified(id: i64):
-    sync.Lock(lock)
-    defer sync.Unlock(lock)
-    setNotified(id, 1)
-end
-
-pub func MarkFailed(id: i64):
-    sync.Lock(lock)
-    defer sync.Unlock(lock)
-    setNotified(id, 2)
 end
