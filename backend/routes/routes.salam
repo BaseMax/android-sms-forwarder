@@ -1,0 +1,22 @@
+package routes
+
+import net.router
+import api "../api.salam"
+
+func notFound(ctx: i64):
+    api.Fail(ctx, 404, "not found")
+end
+
+pub func Register(r &: router.Router):
+    router.Post(r, "/api/sms", postSms)
+    router.Get(r, "/api/sms", getSms)
+    router.Get(r, "/api/stats", getStats)
+    router.Get(r, "/health", getHealth)
+    router.Get(r, "*", notFound)
+    router.Post(r, "*", notFound)
+    router.Put(r, "*", notFound)
+    router.Delete(r, "*", notFound)
+    router.Patch(r, "*", notFound)
+    router.Head(r, "*", notFound)
+    router.Options(r, "*", notFound)
+end

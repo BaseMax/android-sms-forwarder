@@ -1,0 +1,26 @@
+package routes
+
+import api "../api.salam"
+import clock "../clock.salam"
+import store "../store.salam"
+import notify "../notify.salam"
+import responses "../responses.salam"
+
+func getStats(ctx: i64):
+    if !api.Authorized(ctx): ret end
+    now := clock.NowMs()
+    api.Send(ctx, 200, responses.Stats {
+        total = store.Total(),
+        server_time_ms = now,
+        server_time_utc = clock.UTC(now)
+    })
+end
+
+func getHealth(ctx: i64):
+    now := clock.NowMs()
+    api.Send(ctx, 200, responses.Health {
+        notifications = notify.Enabled(),
+        server_time_ms = now,
+        server_time_utc = clock.UTC(now)
+    })
+end

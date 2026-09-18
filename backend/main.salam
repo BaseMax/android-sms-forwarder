@@ -4,7 +4,7 @@ import net.http
 import net.router
 import api "api.salam"
 import config "config.salam"
-import routes "routes.salam"
+import routes "routes/routes.salam"
 import store "store.salam"
 import notify "notify.salam"
 

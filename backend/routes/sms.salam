@@ -1,13 +1,11 @@
 package routes
 
 import net.http
-import net.router
-import api "api.salam"
-import clock "clock.salam"
-import ingest "ingest.salam"
-import store "store.salam"
-import notify "notify.salam"
-import responses "responses.salam"
+import api "../api.salam"
+import clock "../clock.salam"
+import ingest "../ingest.salam"
+import store "../store.salam"
+import responses "../responses.salam"
 
 const PAGE_DEFAULT := 100
 const PAGE_MAX := 1000
@@ -51,41 +49,4 @@ func getSms(ctx: i64):
         server_time_ms = now,
         server_time_utc = clock.UTC(now)
     })
-end
-
-func getStats(ctx: i64):
-    if !api.Authorized(ctx): ret end
-    now := clock.NowMs()
-    api.Send(ctx, 200, responses.Stats {
-        total = store.Total(),
-        server_time_ms = now,
-        server_time_utc = clock.UTC(now)
-    })
-end
-
-func getHealth(ctx: i64):
-    now := clock.NowMs()
-    api.Send(ctx, 200, responses.Health {
-        notifications = notify.Enabled(),
-        server_time_ms = now,
-        server_time_utc = clock.UTC(now)
-    })
-end
-
-func notFound(ctx: i64):
-    api.Fail(ctx, 404, "not found")
-end
-
-pub func Register(r &: router.Router):
-    router.Post(r, "/api/sms", postSms)
-    router.Get(r, "/api/sms", getSms)
-    router.Get(r, "/api/stats", getStats)
-    router.Get(r, "/health", getHealth)
-    router.Get(r, "*", notFound)
-    router.Post(r, "*", notFound)
-    router.Put(r, "*", notFound)
-    router.Delete(r, "*", notFound)
-    router.Patch(r, "*", notFound)
-    router.Head(r, "*", notFound)
-    router.Options(r, "*", notFound)
 end
