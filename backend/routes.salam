@@ -7,33 +7,10 @@ import clock "clock.salam"
 import ingest "ingest.salam"
 import store "store.salam"
 import notify "notify.salam"
+import responses "responses.salam"
 
 const PAGE_DEFAULT := 100
 const PAGE_MAX := 1000
-
-pub struct Page:
-    pub items: Vector<store.Sms> = Vector {} as Vector<store.Sms>
-    pub count: i64 = 0
-    pub since: i64 = 0
-    pub since_utc: str = ""
-    pub server_time_ms: i64 = 0
-    pub server_time_utc: str = ""
-end
-
-pub struct Stats:
-    pub total: i64 = 0
-    pub server_time_ms: i64 = 0
-    pub server_time_utc: str = ""
-end
-
-pub struct Health:
-    pub status: str = "ok"
-    pub service: str = "sms-forwarder"
-    pub notifications: bool = false
-    pub timezone: str = "UTC"
-    pub server_time_ms: i64 = 0
-    pub server_time_utc: str = ""
-end
 
 func defaultsFrom(ctx: i64): ingest.Defaults:
     ret ingest.Defaults {
@@ -66,7 +43,7 @@ func getSms(ctx: i64):
     now := clock.NowMs()
     mut total := 0 as i64
     items := store.ListPage(since, limit, offset, total)
-    api.Send(ctx, 200, Page {
+    api.Send(ctx, 200, responses.Page {
         items = items,
         count = total,
         since = since,
@@ -79,7 +56,7 @@ end
 func getStats(ctx: i64):
     if !api.Authorized(ctx): ret end
     now := clock.NowMs()
-    api.Send(ctx, 200, Stats {
+    api.Send(ctx, 200, responses.Stats {
         total = store.Total(),
         server_time_ms = now,
         server_time_utc = clock.UTC(now)
@@ -88,7 +65,7 @@ end
 
 func getHealth(ctx: i64):
     now := clock.NowMs()
-    api.Send(ctx, 200, Health {
+    api.Send(ctx, 200, responses.Health {
         notifications = notify.Enabled(),
         server_time_ms = now,
         server_time_utc = clock.UTC(now)

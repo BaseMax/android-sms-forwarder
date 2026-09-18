@@ -1,0 +1,27 @@
+package responses
+
+import store "store.salam"
+
+pub struct Page:
+    pub items: Vector<store.Sms> = Vector {} as Vector<store.Sms>
+    pub count: i64 = 0
+    pub since: i64 = 0
+    pub since_utc: str = ""
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
+end
+
+pub struct Stats:
+    pub total: i64 = 0
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
+end
+
+pub struct Health:
+    pub status: str = "ok"
+    pub service: str = "sms-forwarder"
+    pub notifications: bool = false
+    pub timezone: str = "UTC"
+    pub server_time_ms: i64 = 0
+    pub server_time_utc: str = ""
+end
