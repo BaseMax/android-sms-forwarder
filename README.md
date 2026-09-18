@@ -2,7 +2,9 @@
 
 Back up every SMS on an Android phone to a server you control - the moment a
 message arrives, and once a day as a full sweep - so you never lose your texts
-when you switch phones. Each new incoming SMS can also ping you on Telegram.
+when you switch phones. The server also forwards a full copy of every stored
+message to your own Telegram, reliably (queued, rate-limited, and re-tried
+until it lands).
 
 > Built for a simple need: *"I need an app that scans all SMS and uploads to an
 > API server every day, and whenever a new SMS is received - I keep losing SMS
@@ -13,12 +15,12 @@ when you switch phones. Each new incoming SMS can also ping you on Telegram.
 | Part                     | Language | What it is                                                        |
 | ------------------------ | -------- | ----------------------------------------------------------------- |
 | [`android/`](android/)   | Kotlin   | The phone app: reads SMS, uploads on arrival and daily.           |
-| [`backend/`](backend/)   | [Salam](https://github.com/SalamLang/Salam) | A small JSON API over **SQLite** that stores messages and sends Telegram alerts. |
+| [`backend/`](backend/)   | [Salam](https://github.com/SalamLang/Salam) | A small JSON API over **SQLite** that stores messages and forwards each to Telegram. |
 
 ```
   Android app (Kotlin)                                  Salam backend
   reads SMS, uploads on          --  POST /api/sms  -->  stores in SQLite,
-  arrival and daily              <-- GET  /api/sms  ---  sends Telegram alert
+  arrival and daily              <-- GET  /api/sms  ---  forwards each row
                                      (restore new phone)          |
                                                                   v
                                                               Telegram
@@ -56,13 +58,14 @@ requires the shared secret in the `X-API-Key` header.
 ```sh
 cd backend
 salam build main.salam --output=sms-backend
-export API_KEY="$(openssl rand -hex 32)"
-export BOT_TOKEN="123456:abc..."      # optional, from @BotFather
-export TELEGRAM_CHAT_ID="987654321"   # optional, your own chat id
-./sms-backend                          # listens on :8080
+cp ../.env.example ../.env   # then edit ../.env: set API_KEY, and BOT_TOKEN + TELEGRAM_CHAT_ID for Telegram
+./sms-backend                # reads .env from the current dir, then the parent; listens on :8080
 ```
 
-Put it behind HTTPS (a reverse proxy) before pointing a phone at it.
+Config comes from the environment; the service loads a `.env` file (current
+directory first, then the parent) so a plain `./sms-backend` just works. Real
+environment variables still win over the file. Put the server behind HTTPS (a
+reverse proxy) before pointing a phone at it.
 
 **Android** (needs Android Studio / the Android SDK, JDK 17):
 
@@ -80,8 +83,14 @@ after that.
 
 - **The bot token lives on the server, never the phone**, so a lost phone leaks
   no Telegram credentials.
-- **All SQL is in one file** (`backend/store.salam`) and reaches the database
-  only as bound parameters - no query is built by string concatenation.
+- **Telegram delivery cannot silently drop a message.** Each stored row is
+  marked delivered only after Telegram accepts it; a background worker sends
+  them one at a time (about one per second, so a bulk restore never trips
+  Telegram's rate limit) and retries transient failures. Because the "not yet
+  sent" state lives in SQLite, a crash or restart resumes exactly where it left
+  off.
+- **All SQL lives in one layer** (`backend/store/queries.salam`) and reaches the
+  database only as bound parameters - no query is built by string concatenation.
 - **The phone keeps a high-water mark** (how far it has read through the SMS
   provider) and only sends what is newer, so the daily sweep is cheap after the
   first full scan.
