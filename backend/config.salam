@@ -1,7 +1,7 @@
 package config
 
 import os
-import parse "parse.salam"
+import env
 
 const DEFAULT_DB := "sms.db"
 const DEFAULT_PORT := 8080
@@ -14,24 +14,21 @@ pub struct Config:
     pub chat_id: i64 = 0
 end
 
-func _text(name: str, fallback: str): str:
-    v := os.Env(name)
-    if v.len() == 0: ret fallback end
-    ret v
-end
-
-func _num(name: str, fallback: i64): i64:
-    v := os.Env(name)
-    if v.len() == 0: ret fallback end
-    ret parse.I64(v)
+func loadDotEnv():
+    if os.Exists(".env"):
+        env.Load(".env")
+    else:
+        env.Load("../.env")
+    end
 end
 
 pub func FromEnv(): Config:
+    loadDotEnv()
     ret Config {
-        api_key = os.Env("API_KEY"),
-        db_path = _text("DB_PATH", DEFAULT_DB),
-        port = _num("PORT", DEFAULT_PORT as i64) as int,
-        bot_token = os.Env("BOT_TOKEN"),
-        chat_id = _num("TELEGRAM_CHAT_ID", 0 as i64)
+        api_key = env.Get("API_KEY"),
+        db_path = env.GetOr("DB_PATH", DEFAULT_DB),
+        port = env.GetInt("PORT", DEFAULT_PORT as i64) as int,
+        bot_token = env.Get("BOT_TOKEN"),
+        chat_id = env.GetInt("TELEGRAM_CHAT_ID", 0 as i64)
     }
 end
