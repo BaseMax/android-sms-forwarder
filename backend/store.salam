@@ -12,9 +12,9 @@ const COLUMNS := "id, device, address, body, date, type, received_at, tz_offset,
 
 const MATCHING := " FROM messages WHERE date >= ?"
 
-mut _db := sqlite.Database {}
-mut _lock := sync.Mutex {}
-mut _ready := false
+mut database := sqlite.Database {}
+mut lock := sync.Mutex {}
+mut ready := false
 
 pub struct Sms:
     pub id: i64 = 0
@@ -31,7 +31,7 @@ pub struct Sms:
     pub received_at_utc: str = ""
 end
 
-func _row(rows: sqlite.Rows): Sms:
+func readRow(rows: sqlite.Rows): Sms:
     date := sqlite.Int64(rows, 4)
     offset := sqlite.Int(rows, 7)
     received := sqlite.Int64(rows, 6)
@@ -51,21 +51,21 @@ func _row(rows: sqlite.Rows): Sms:
     }
 end
 
-func _select(since: i64, limit: int, offset: int): Vector<Sms>:
+func selectPage(since: i64, limit: int, offset: int): Vector<Sms>:
     mut out := Vector {} as Vector<Sms>
-    rows := sqlite.Prepare(_db, "SELECT " + COLUMNS + MATCHING + " ORDER BY date DESC, id DESC LIMIT ? OFFSET ?")
+    rows := sqlite.Prepare(database, "SELECT " + COLUMNS + MATCHING + " ORDER BY date DESC, id DESC LIMIT ? OFFSET ?")
     sqlite.BindInt(rows, 1, since)
     sqlite.BindInt(rows, 2, limit as i64)
     sqlite.BindInt(rows, 3, offset as i64)
     until sqlite.Next(rows):
-        out.push(_row(rows))
+        out.push(readRow(rows))
     end
     sqlite.Finish(rows)
     ret out
 end
 
-func _count(since: i64): i64:
-    rows := sqlite.Prepare(_db, "SELECT COUNT(*)" + MATCHING)
+func countSince(since: i64): i64:
+    rows := sqlite.Prepare(database, "SELECT COUNT(*)" + MATCHING)
     sqlite.BindInt(rows, 1, since)
     mut n := 0 as i64
     if sqlite.Next(rows): n = sqlite.Int64(rows, 0) end
@@ -73,55 +73,55 @@ func _count(since: i64): i64:
     ret n
 end
 
-func _table_exists(): bool:
-    ret sqlite.QueryInt(_db, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'") > 0
+func tableExists(): bool:
+    ret sqlite.QueryInt(database, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages'") > 0
 end
 
-func _version(): int:
-    ret sqlite.QueryInt(_db, "PRAGMA user_version")
+func userVersion(): int:
+    ret sqlite.QueryInt(database, "PRAGMA user_version")
 end
 
-func _upgrade_to_1():
-    sqlite.Exec(_db, "ALTER TABLE messages ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
-    sqlite.Exec(_db, "ALTER TABLE messages ADD COLUMN tz_name TEXT NOT NULL DEFAULT ''")
-    sqlite.Exec(_db, "UPDATE messages SET received_at = received_at * 1000 WHERE received_at > 0 AND received_at < 946684800000")
-    sqlite.Exec(_db, "UPDATE OR IGNORE messages SET date = date * 1000 WHERE date > 0 AND date < 946684800000")
+func upgradeToV1():
+    sqlite.Exec(database, "ALTER TABLE messages ADD COLUMN tz_offset INTEGER NOT NULL DEFAULT 0")
+    sqlite.Exec(database, "ALTER TABLE messages ADD COLUMN tz_name TEXT NOT NULL DEFAULT ''")
+    sqlite.Exec(database, "UPDATE messages SET received_at = received_at * 1000 WHERE received_at > 0 AND received_at < 946684800000")
+    sqlite.Exec(database, "UPDATE OR IGNORE messages SET date = date * 1000 WHERE date > 0 AND date < 946684800000")
 end
 
-func _migrate():
-    sqlite.Exec(_db, "PRAGMA journal_mode=WAL")
-    sqlite.Exec(_db, "PRAGMA busy_timeout=5000")
-    fresh := !_table_exists()
-    sqlite.Exec(_db, CREATE_MESSAGES)
+func migrate():
+    sqlite.Exec(database, "PRAGMA journal_mode=WAL")
+    sqlite.Exec(database, "PRAGMA busy_timeout=5000")
+    fresh := !tableExists()
+    sqlite.Exec(database, CREATE_MESSAGES)
     if fresh:
-        sqlite.Exec(_db, "PRAGMA user_version=1")
+        sqlite.Exec(database, "PRAGMA user_version=1")
     end
-    if _version() < SCHEMA_VERSION:
-        _upgrade_to_1()
-        sqlite.Exec(_db, "PRAGMA user_version=1")
+    if userVersion() < SCHEMA_VERSION:
+        upgradeToV1()
+        sqlite.Exec(database, "PRAGMA user_version=1")
     end
-    sqlite.Exec(_db, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
-    sqlite.Exec(_db, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
+    sqlite.Exec(database, "CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_natural ON messages(address, body, date, type)")
+    sqlite.Exec(database, "CREATE INDEX IF NOT EXISTS ix_messages_date ON messages(date)")
 end
 
 pub func Init(path: str): bool:
     if !sqlite.Available(): ret false end
-    _db = sqlite.Open(path)
-    if !sqlite.Ok(_db): ret false end
-    _lock = sync.NewMutex()
-    _migrate()
-    _ready = true
+    database = sqlite.Open(path)
+    if !sqlite.Ok(database): ret false end
+    lock = sync.NewMutex()
+    migrate()
+    ready = true
     ret true
 end
 
 pub func Close():
-    if _ready: sqlite.Close(_db) end
+    if ready: sqlite.Close(database) end
 end
 
 pub func Save(m: Sms): bool:
-    sync.Lock(_lock)
-    defer sync.Unlock(_lock)
-    ins := sqlite.Prepare(_db, "INSERT OR IGNORE INTO messages(device, address, body, date, type, received_at, tz_offset, tz_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    ins := sqlite.Prepare(database, "INSERT OR IGNORE INTO messages(device, address, body, date, type, received_at, tz_offset, tz_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
     sqlite.BindText(ins, 1, m.device)
     sqlite.BindText(ins, 2, m.address)
     sqlite.BindText(ins, 3, m.body)
@@ -132,19 +132,19 @@ pub func Save(m: Sms): bool:
     sqlite.BindText(ins, 8, m.tz_name)
     sqlite.Next(ins)
     sqlite.Finish(ins)
-    ret sqlite.Changes(_db) > 0
+    ret sqlite.Changes(database) > 0
 end
 
 pub func ListPage(since: i64, limit: int, offset: int, total &: i64): Vector<Sms>:
-    sync.Lock(_lock)
-    defer sync.Unlock(_lock)
-    items := _select(since, limit, offset)
-    total = _count(since)
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    items := selectPage(since, limit, offset)
+    total = countSince(since)
     ret items
 end
 
 pub func Total(): i64:
-    sync.Lock(_lock)
-    defer sync.Unlock(_lock)
-    ret _count(0 as i64)
+    sync.Lock(lock)
+    defer sync.Unlock(lock)
+    ret countSince(0 as i64)
 end

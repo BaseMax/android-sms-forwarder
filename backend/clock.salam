@@ -21,33 +21,33 @@ const MAX_OFFSET_MINUTES := 840
 
 const MAX_ZONE_NAME := 64
 
-func _pad2(n: int): str:
+func pad2(n: int): str:
     s := conv.FormatInt(n as i64)
     if s.len() < 2: ret "0" + s end
     ret s
 end
 
-func _pad3(n: int): str:
+func pad3(n: int): str:
     s := conv.FormatInt(n as i64)
     if s.len() < 2: ret "00" + s end
     if s.len() < 3: ret "0" + s end
     ret s
 end
 
-func _floor_div(a: i64, b: i64): i64:
+func floorDiv(a: i64, b: i64): i64:
     mut q := a / b
     if a % b != 0 as i64 && (a < 0 as i64) != (b < 0 as i64): q -= 1 as i64 end
     ret q
 end
 
-func _civil(ms: i64): str:
-    seconds := _floor_div(ms, MS_PER_SECOND)
+func civil(ms: i64): str:
+    seconds := floorDiv(ms, MS_PER_SECOND)
     millis := (ms - seconds * MS_PER_SECOND) as int
     iso := time.FormatISOUTC(seconds)
-    ret iso.substr(0, iso.len() - 1) + "." + _pad3(millis)
+    ret iso.substr(0, iso.len() - 1) + "." + pad3(millis)
 end
 
-func _is_digits(s: str): bool:
+func isDigits(s: str): bool:
     n := s.len()
     if n == 0: ret false end
     mut i := 0
@@ -107,21 +107,21 @@ pub func FormatOffset(offset_minutes: int): str:
         sign = "-"
         v = 0 - v
     end
-    ret sign + _pad2(v / 60) + ":" + _pad2(v % 60)
+    ret sign + pad2(v / 60) + ":" + pad2(v % 60)
 end
 
 pub func UTC(ms: i64): str:
-    ret _civil(ms) + "Z"
+    ret civil(ms) + "Z"
 end
 
 pub func Local(ms: i64, offset_minutes: int): str:
-    ret _civil(ms + (offset_minutes as i64) * MS_PER_MINUTE) + FormatOffset(offset_minutes)
+    ret civil(ms + (offset_minutes as i64) * MS_PER_MINUTE) + FormatOffset(offset_minutes)
 end
 
 pub func ParseInstantMs(s: str, fallback: i64): i64:
     t := s.trim()
     if t.len() == 0: ret fallback end
-    if _is_digits(t):
+    if isDigits(t):
         v := parse.I64(t)
         if v <= 0 as i64: ret 0 end
         ret NormalizeMs(v, NowMs())

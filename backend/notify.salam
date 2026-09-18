@@ -3,11 +3,11 @@ package notify
 import telegram.bot
 import clock "clock.salam"
 
-mut _bot := bot.Bot {}
-mut _chat := 0 as i64
-mut _enabled := false
+mut client := bot.Bot {}
+mut chatId := 0 as i64
+mut active := false
 
-func _when(date_ms: i64, tz_offset_minutes: int, tz_name: str): str:
+func formatWhen(date_ms: i64, tz_offset_minutes: int, tz_name: str): str:
     mut s := "When: " + clock.UTC(date_ms) + " (UTC)"
     if tz_offset_minutes != 0 || tz_name.len() > 0:
         mut where := ""
@@ -19,23 +19,23 @@ end
 
 pub func Init(token: str, chat_id: i64): bool:
     if token.len() == 0 || chat_id == 0 as i64:
-        _enabled = false
+        active = false
         ret false
     end
-    _bot = bot.NewBot(token)
-    _chat = chat_id
-    _enabled = true
+    client = bot.NewBot(token)
+    chatId = chat_id
+    active = true
     ret true
 end
 
 pub func Enabled(): bool:
-    ret _enabled
+    ret active
 end
 
 pub func SmsAlert(address: str, body: str, date_ms: i64, tz_offset_minutes: int, tz_name: str):
-    if !_enabled: ret end
+    if !active: ret end
     mut from := address
     if from.len() == 0: from = "(unknown)" end
-    text := "New SMS received\n\nFrom: " + from + "\n" + _when(date_ms, tz_offset_minutes, tz_name) + "\n\n" + body
-    bot.SendMessage(_bot, _chat, text)
+    text := "New SMS received\n\nFrom: " + from + "\n" + formatWhen(date_ms, tz_offset_minutes, tz_name) + "\n\n" + body
+    bot.SendMessage(client, chatId, text)
 end

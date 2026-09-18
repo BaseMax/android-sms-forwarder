@@ -6,14 +6,14 @@ import encoding.json
 import parse "parse.salam"
 import clock "clock.salam"
 
-mut _key := ""
+mut apiKey := ""
 
 pub struct Error:
     pub error: str = ""
 end
 
 pub func UseKey(key: str):
-    _key = key
+    apiKey = key
 end
 
 pub func Send<T>(ctx: i64, code: int, payload: T):
@@ -27,7 +27,7 @@ pub func Fail(ctx: i64, code: int, message: str):
 end
 
 pub func Authorized(ctx: i64): bool:
-    if crypto.SecretEquals(http.Ctx_header(ctx, "X-API-Key"), _key): ret true end
+    if crypto.SecretEquals(http.Ctx_header(ctx, "X-API-Key"), apiKey): ret true end
     Fail(ctx, 401, "unauthorized")
     ret false
 end

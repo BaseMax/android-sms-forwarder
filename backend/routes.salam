@@ -35,7 +35,7 @@ pub struct Health:
     pub server_time_utc: str = ""
 end
 
-func _defaults(ctx: i64): ingest.Defaults:
+func defaultsFrom(ctx: i64): ingest.Defaults:
     ret ingest.Defaults {
         device = http.Ctx_header(ctx, "X-Device-Id"),
         tz_offset_minutes = clock.NormalizeOffsetMinutes(api.HeaderI64(ctx, "X-Tz-Offset")),
@@ -43,7 +43,7 @@ func _defaults(ctx: i64): ingest.Defaults:
     }
 end
 
-func _create_sms(ctx: i64):
+func postSms(ctx: i64):
     if !api.Authorized(ctx): ret end
     body := http.Ctx_body(ctx)
     if body.len() == 0:
@@ -51,14 +51,14 @@ func _create_sms(ctx: i64):
         ret
     end
     mut rep := ingest.Report {}
-    if !ingest.Request(body, _defaults(ctx), rep):
+    if !ingest.Request(body, defaultsFrom(ctx), rep):
         api.Fail(ctx, 400, "invalid JSON")
         ret
     end
     api.Send(ctx, 200, rep)
 end
 
-func _list_sms(ctx: i64):
+func getSms(ctx: i64):
     if !api.Authorized(ctx): ret end
     since := api.QueryInstantMs(ctx, "since", 0 as i64)
     limit := api.QueryLimit(ctx, "limit", PAGE_DEFAULT, PAGE_MAX)
@@ -76,7 +76,7 @@ func _list_sms(ctx: i64):
     })
 end
 
-func _stats(ctx: i64):
+func getStats(ctx: i64):
     if !api.Authorized(ctx): ret end
     now := clock.NowMs()
     api.Send(ctx, 200, Stats {
@@ -86,7 +86,7 @@ func _stats(ctx: i64):
     })
 end
 
-func _health(ctx: i64):
+func getHealth(ctx: i64):
     now := clock.NowMs()
     api.Send(ctx, 200, Health {
         notifications = notify.Enabled(),
@@ -96,8 +96,8 @@ func _health(ctx: i64):
 end
 
 pub func Register(r &: router.Router):
-    router.Post(r, "/api/sms", _create_sms)
-    router.Get(r, "/api/sms", _list_sms)
-    router.Get(r, "/api/stats", _stats)
-    router.Get(r, "/health", _health)
+    router.Post(r, "/api/sms", postSms)
+    router.Get(r, "/api/sms", getSms)
+    router.Get(r, "/api/stats", getStats)
+    router.Get(r, "/health", getHealth)
 end

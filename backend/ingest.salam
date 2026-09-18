@@ -22,7 +22,7 @@ pub struct Defaults:
     pub tz_name: str = ""
 end
 
-func _count(rep &: Report, created: bool):
+func tally(rep &: Report, created: bool):
     rep.received += 1
     if created:
         rep.stored += 1
@@ -31,7 +31,7 @@ func _count(rep &: Report, created: bool):
     end
 end
 
-func _offset(item: value.Value, fallback: int): int:
+func offsetOf(item: value.Value, fallback: int): int:
     if value.ObjectHas(item, "tz_offset_minutes"):
         ret clock.NormalizeOffsetMinutes(parse.Number(item, "tz_offset_minutes"))
     end
@@ -41,12 +41,12 @@ func _offset(item: value.Value, fallback: int): int:
     ret fallback
 end
 
-func _zone(item: value.Value, fallback: str): str:
+func zoneOf(item: value.Value, fallback: str): str:
     name := parse.TextOr(item, "tz_name", parse.TextOr(item, "timezone", fallback))
     ret clock.NormalizeZoneName(name)
 end
 
-func _one(item: value.Value, def: Defaults, now_ms: i64): bool:
+func ingestItem(item: value.Value, def: Defaults, now_ms: i64): bool:
     if !value.IsObject(item): ret false end
     address := parse.Text(item, "address")
     text := parse.Text(item, "body")
@@ -54,8 +54,8 @@ func _one(item: value.Value, def: Defaults, now_ms: i64): bool:
     mut kind := parse.Number(item, "type") as int
     if kind == 0: kind = 1 end
     date := clock.NormalizeMs(parse.Number(item, "date"), now_ms)
-    offset := _offset(item, def.tz_offset_minutes)
-    zone := _zone(item, def.tz_name)
+    offset := offsetOf(item, def.tz_offset_minutes)
+    zone := zoneOf(item, def.tz_name)
     created := store.Save(store.Sms {
         device = parse.TextOr(item, "device", def.device),
         address = address,
@@ -71,22 +71,22 @@ func _one(item: value.Value, def: Defaults, now_ms: i64): bool:
     ret created
 end
 
-func _array(arr: value.Value, def: Defaults, now_ms: i64, rep &: Report):
+func ingestArray(arr: value.Value, def: Defaults, now_ms: i64, rep &: Report):
     repeat value.ArrayLen(arr) with i:
-        _count(rep, _one(value.ArrayGet(arr, i), def, now_ms))
+        tally(rep, ingestItem(value.ArrayGet(arr, i), def, now_ms))
     end
 end
 
-func _walk(v: value.Value, def: Defaults, now_ms: i64, rep &: Report):
+func ingestBody(v: value.Value, def: Defaults, now_ms: i64, rep &: Report):
     if value.IsArray(v):
-        _array(v, def, now_ms, rep)
+        ingestArray(v, def, now_ms, rep)
         ret
     end
     if value.IsObject(v) && value.ObjectHas(v, "messages"):
-        _array(value.ObjectGet(v, "messages"), def, now_ms, rep)
+        ingestArray(value.ObjectGet(v, "messages"), def, now_ms, rep)
         ret
     end
-    _count(rep, _one(v, def, now_ms))
+    tally(rep, ingestItem(v, def, now_ms))
 end
 
 pub func Request(body: str, def: Defaults, rep &: Report): bool:
@@ -99,7 +99,7 @@ pub func Request(body: str, def: Defaults, rep &: Report): bool:
     if encerr.IsError(e):
         ok = false
     else:
-        _walk(v, def, now, rep)
+        ingestBody(v, def, now, rep)
     end
     value.ValueFree(v)
     ret ok
